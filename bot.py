@@ -287,19 +287,23 @@ Pilih episode yang ingin ditonton:
 
         await query.edit_message_text(text)
 
-        # Send video URL as document/link
+        # Send video file
         try:
             if not episode_url:
                 await query.message.reply_text("❌ Video tidak dapat dimuat. Silakan coba lagi nanti.")
                 return
                 
-            caption = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\n📁 Klik link di bawah untuk download/streaming:\n{episode_url}\n\nSelamat menonton! 🎭"
+            caption = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
             
-            # Send video URL as downloadable document
-            await query.message.reply_document(
-                document=episode_url,
+            # Send video with timeout handling
+            await query.message.reply_video(
+                video=episode_url,
                 caption=caption,
-                filename=f"{drama['title']}_Episode_1.mp4"
+                supports_streaming=True,
+                protect_content=True,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=30
             )
             
             # Add buttons based on premium status
@@ -365,12 +369,6 @@ Upgrade ke premium untuk menonton tanpa batas:
             await self.show_packages_callback(query)
             return
         
-        # Get drama details
-        drama = await self.get_drama_details(drama_id)
-        if not drama:
-            await query.edit_message_text("❌ Drama tidak ditemukan.")
-            return
-        
         # Get episode URL from S3
         episode_url = await self.get_episode_url(drama_id, episode_num)
         if not episode_url:
@@ -393,13 +391,17 @@ Upgrade ke premium untuk menonton tanpa batas:
 
         await query.edit_message_text(text)
 
-        # Send video URL as document/link
+        # Send video file
         try:
-            caption = f"🎬 Episode {episode_num}\n📺 Status: {watch_status}\n\n📁 Klik link di bawah untuk download/streaming:\n{episode_url}\n\nSelamat menonton! 🎭"
-            await query.message.reply_document(
-                document=episode_url,
+            caption = f"🎬 Episode {episode_num}\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
+            await query.message.reply_video(
+                video=episode_url,
                 caption=caption,
-                filename=f"Episode_{episode_num}.mp4"
+                supports_streaming=True,
+                protect_content=True,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=30
             )
             
             # Add buttons based on premium status
@@ -444,7 +446,7 @@ Upgrade ke premium untuk menonton tanpa batas:
             await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
             # Fallback: send text message with video URL if available
             if 'episode_url' in locals() and episode_url:
-                fallback_text = f"🎬 {drama['title']} - Episode {episode_num}\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                fallback_text = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
                 await query.message.reply_text(fallback_text)
             else:
                 await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
@@ -517,13 +519,17 @@ Pilih paket yang sesuai:
 
         await query.edit_message_text(text)
 
-        # Send video URL as document/link
+        # Send video file
         try:
-            caption = f"🎬 {drama['title']} - Episode {next_episode}\n📺 Status: {watch_status}\n\n📁 Klik link di bawah untuk download/streaming:\n{episode_url}\n\nSelamat menonton! 🎭"
-            await query.message.reply_document(
-                document=episode_url,
+            caption = f"🎬 {drama['title']} - Episode {next_episode}\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
+            await query.message.reply_video(
+                video=episode_url,
                 caption=caption,
-                filename=f"{drama['title']}_Episode_{next_episode}.mp4"
+                supports_streaming=True,
+                protect_content=True,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=30
             )
             
             # Add buttons based on premium status
@@ -568,7 +574,7 @@ Upgrade ke premium untuk menonton tanpa batas:
             await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
             # Fallback: send text message with video URL if available
             if 'episode_url' in locals() and episode_url:
-                fallback_text = f"🎬 {drama['title']} - Episode {next_episode}\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                fallback_text = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
                 await query.message.reply_text(fallback_text)
             else:
                 await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
