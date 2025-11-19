@@ -1,0 +1,6 @@
+ 
+project_name = drmbox
+db_password = Rahasia2025
+
+
+cron -> get list 20 drama yang belum kedownload -> running scraper 1-1
