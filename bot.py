@@ -164,8 +164,8 @@ Kirim pesan ke admin jika ada masalah
         for drama in dramas[:10]:  # Show max 10 dramas
             keyboard.append([
                 InlineKeyboardButton(
-                    f"🎬 {drama['title']} (Ep. {drama['episodes']})",
-                    callback_data=f"drama_{drama['id']}"
+                    f"🎬 {drama.get('title', 'N/A')} (Ep. {drama.get('episodes', 'N/A')})",
+                    callback_data=f"drama_{drama.get('id', 'N/A')}"
                 )
             ])
 
@@ -218,23 +218,23 @@ Kirim pesan ke admin jika ada masalah
             return
 
         text = f"""
-🎬 *{drama['title']}*
+🎬 *{drama.get('title', 'N/A')}*
 
 📝 Deskripsi: {drama.get('description', 'N/A')}
 🎭 Genre: {drama.get('genre', 'N/A')}
-📺 Total Episode: {drama['episodes']}
+📺 Total Episode: {drama.get('episodes', 0)}
 ⭐ Rating: {drama.get('rating', 'N/A')}
 
 Pilih episode yang ingin ditonton:
         """
 
         keyboard = []
-        for i in range(1, min(drama['episodes'] + 1, 11)):  # Show max 10 episodes
+        for i in range(1, min(drama.get('episodes', 0) + 1, 11)):  # Show max 10 episodes
             keyboard.append([
                 InlineKeyboardButton(f"Episode {i}", callback_data=f"episode_{drama_id}_{i}")
             ])
 
-        if drama['episodes'] > 10:
+        if drama.get('episodes', 0) > 10:
             keyboard.append([InlineKeyboardButton("➡️ Next Episodes", callback_data=f"episodes_page_{drama_id}_2")])
 
         keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data="show_dramas")])
@@ -266,7 +266,7 @@ Pilih episode yang ingin ditonton:
             return
         
         # Get episode 1 URL from S3
-        episode_url = await self.get_episode_url(drama_id, 1, drama['title'])
+        episode_url = await self.get_episode_url(drama_id, 1, drama.get('title', 'Unknown'))
         if not episode_url:
             await query.edit_message_text("❌ Episode tidak tersedia atau sedang dalam proses upload.")
             return
@@ -279,7 +279,7 @@ Pilih episode yang ingin ditonton:
         # Send streaming message
         watch_status = "Premium" if is_premium else f"Gratis ({remaining_watches} tersisa)"
         text = f"""
-🎬 {drama['title']} - Episode 1
+🎬 {drama.get('title', 'Unknown')} - Episode 1
 
 📺 Status: {watch_status}
 📹 Link streaming sedang diproses...
@@ -293,7 +293,7 @@ Pilih episode yang ingin ditonton:
                 await query.message.reply_text("❌ Video tidak dapat dimuat. Silakan coba lagi nanti.")
                 return
                 
-            caption = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
+            caption = f"🎬 {drama.get('title', 'Unknown')} - Episode 1\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
             
             # Send video with timeout handling
             await query.message.reply_video(
@@ -368,9 +368,9 @@ Upgrade ke premium untuk menonton tanpa batas:
             # Show premium packages if no free watches left
             await self.show_packages_callback(query)
             return
-        
+        drama = await self.get_drama_details(drama_id)
         # Get episode URL from S3
-        episode_url = await self.get_episode_url(drama_id, episode_num)
+        episode_url = await self.get_episode_url(drama_id, episode_num, drama.get('title', 'Unknown'))
         if not episode_url:
             await query.edit_message_text("❌ Episode tidak tersedia.")
             return
@@ -446,7 +446,8 @@ Upgrade ke premium untuk menonton tanpa batas:
             await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
             # Fallback: send text message with video URL if available
             if 'episode_url' in locals() and episode_url:
-                fallback_text = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                drama = await self.get_drama_details(drama_id)
+                fallback_text = f"🎬 {drama.get('title', 'Unknown')} - Episode {episode_num}\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
                 await query.message.reply_text(fallback_text)
             else:
                 await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
@@ -456,13 +457,13 @@ Upgrade ke premium untuk menonton tanpa batas:
         next_episode = current_episode + 1
         
         # Get drama details to check if next episode exists
-        drama = self.get_drama_details(drama_id)
+        drama = await self.get_drama_details(drama_id)
         if not drama:
             await query.edit_message_text("❌ Drama tidak ditemukan.")
             return
         
         # Check if next episode exists (assuming max 12 episodes for now)
-        if next_episode > drama['episodes']:
+        if next_episode > drama.get('episodes', 0):
             await query.edit_message_text("🎬 Sudah mencapai episode terakhir!\n\nGunakan /start untuk kembali ke menu utama.")
             return
         
@@ -498,7 +499,7 @@ Pilih paket yang sesuai:
             return
         
         # Get next episode URL from S3
-        episode_url = self.get_episode_url(drama_id, next_episode)
+        episode_url = await self.get_episode_url(drama_id, next_episode, drama.get('title', 'Unknown'))
         if not episode_url:
             await query.edit_message_text(f"❌ Episode {next_episode} tidak tersedia.")
             return
@@ -511,7 +512,7 @@ Pilih paket yang sesuai:
         # Send streaming message
         watch_status = "Premium" if is_premium else f"Gratis ({remaining_watches} tersisa)"
         text = f"""
-🎬 {drama['title']} - Episode {next_episode}
+🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}
 
 📺 Status: {watch_status}
 📹 Link streaming sedang diproses...
@@ -521,7 +522,7 @@ Pilih paket yang sesuai:
 
         # Send video file
         try:
-            caption = f"🎬 {drama['title']} - Episode {next_episode}\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
+            caption = f"🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
             await query.message.reply_video(
                 video=episode_url,
                 caption=caption,
@@ -574,7 +575,7 @@ Upgrade ke premium untuk menonton tanpa batas:
             await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
             # Fallback: send text message with video URL if available
             if 'episode_url' in locals() and episode_url:
-                fallback_text = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                fallback_text = f"🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
                 await query.message.reply_text(fallback_text)
             else:
                 await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
@@ -717,7 +718,7 @@ Kirim bukti transfer ke @admin
         actual_episodes = await self.get_episode_count_from_s3(drama_id)
         
         text = f"""
-🎬 *{drama['title']}*
+🎬 *{drama.get('title', 'Unknown')}*
 
 📺 Pilih episode yang ingin ditonton:
 📊 Total Episode: {actual_episodes}
@@ -746,11 +747,11 @@ Kirim bukti transfer ke @admin
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
-    async def get_episode_url(self, drama_id: str, episode_num: int, drama_title: str = None) -> str:
+    async def get_episode_url(self, drama_id: str, episode_num: int, drama_title: str) -> str:
         """Get presigned URL for episode video"""
         return await self.generate_presigned_url(drama_id, episode_num, drama_title)
     # Database operations
-    async def generate_presigned_url(self, drama_id: str, episode_num: int, drama_title: str = None) -> str:
+    async def generate_presigned_url(self, drama_id: str, episode_num: int, drama_title) -> str:
         """Generate presigned URL for S3 video file"""
         try:
             bucket_name = 'drama'
@@ -761,8 +762,7 @@ Kirim bukti transfer ke @admin
                 # Clean drama title for filename
                 clean_title = drama_title.replace(' ', '_').replace('/', '_').replace('\\', '_')
                 key = f"{drama_id}/episode_{episode_num}/{clean_title}_ep_{episode_num}.mp4"
-            else:
-                key = f"{drama_id}/episode_{episode_num}/episode_{episode_num}.mp4"
+            
             
             # Generate presigned URL (expires in 1 hour)
             presigned_url = s3_client.generate_presigned_url(
