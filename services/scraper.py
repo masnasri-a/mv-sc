@@ -123,8 +123,8 @@ def get_items_from_url_with_playwright(url, p, book_id):
         ]
     )
     page = browser.new_page()
-    
-    while True:
+    loops = True
+    while loops:
         try:
             setup_request_interception(page)
             page.goto(url, timeout=20000)
@@ -199,7 +199,7 @@ def get_items_from_url_with_playwright(url, p, book_id):
                                 if ep >= eps_num:
                                     client = get_supabase_client()
                                     client.table('Drama').update({'has_downloaded': True}).eq('id', book_id).execute()
-                                    
+                                    loops = False
                                 print(f"Downloaded {filename}")
                                 break
                     except Exception as e:
