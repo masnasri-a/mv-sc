@@ -1,0 +1,2 @@
+-- Add payment_code field to payments table
+ALTER TABLE payments ADD COLUMN payment_code VARCHAR(8) UNIQUE;
