@@ -1,4 +1,4 @@
-import os
+import os, traceback
 import json
 import asyncio
 import boto3
@@ -19,15 +19,16 @@ SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 supabase: Client = get_supabase_client()
 
 # Bot configuration
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8458286417:AAFJJSobOlZ_E3QPsx8bdCBqJuQEgjMvK7E')
+BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 # Admin whitelist - users with unlimited access
 ADMIN_WHITELIST = [1356120446, 731203660]
 
 # S3 configuration for video streaming
-S3_ENDPOINT = os.getenv('S3_ENDPOINT', 'https://s3.nevaobjects.id')
-S3_ACCESS_KEY = os.getenv('S3_ACCESS_KEY', 'KC3VYX02LN7WIYJGURIN')
-S3_SECRET_KEY = os.getenv('S3_SECRET_KEY', 'FUXY0Oj6R7CR0GOZAOE4zUnID1Eri0vGeISnnfGb')
+S3_ENDPOINT = os.getenv('S3_ENDPOINT')
+S3_ACCESS_KEY = os.getenv('S3_ACCESS_KEY')
+S3_SECRET_KEY = os.getenv('S3_SECRET_KEY')
+print("S3 Endpoint:", S3_ENDPOINT)
 
 # Initialize S3 client
 s3_client = boto3.client(
@@ -245,6 +246,7 @@ Pilih episode yang ingin ditonton:
         """Handle featured drama selection - directly stream episode 1"""
         # Check watch count first
         watch_info = await self.get_user_watch_count(user_id)
+        print("Watch info for featured drama:", watch_info)
         free_watches_used = watch_info['used']
         free_watches_limit = watch_info['limit']
         remaining_watches = free_watches_limit - free_watches_used
@@ -266,7 +268,7 @@ Pilih episode yang ingin ditonton:
         # Get episode 1 URL from S3
         episode_url = await self.get_episode_url(drama_id, 1, drama['title'])
         if not episode_url:
-            await query.edit_message_text("❌ Episode tidak tersedia.")
+            await query.edit_message_text("❌ Episode tidak tersedia atau sedang dalam proses upload.")
             return
 
         # Increment watch count if not premium
@@ -285,14 +287,19 @@ Pilih episode yang ingin ditonton:
 
         await query.edit_message_text(text)
 
-        # Send video file
+        # Send video URL as document/link
         try:
-            caption = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
-            await query.message.reply_video(
-                video=episode_url,
+            if not episode_url:
+                await query.message.reply_text("❌ Video tidak dapat dimuat. Silakan coba lagi nanti.")
+                return
+                
+            caption = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\n📁 Klik link di bawah untuk download/streaming:\n{episode_url}\n\nSelamat menonton! 🎭"
+            
+            # Send video URL as downloadable document
+            await query.message.reply_document(
+                document=episode_url,
                 caption=caption,
-                supports_streaming=True,
-                protect_content=True
+                filename=f"{drama['title']}_Episode_1.mp4"
             )
             
             # Add buttons based on premium status
@@ -333,7 +340,14 @@ Upgrade ke premium untuk menonton tanpa batas:
                 await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
             
         except Exception as e:
+            traceback.print_exc()
             await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+            # Fallback: send text message with video URL if available
+            if 'episode_url' in locals() and episode_url:
+                fallback_text = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                await query.message.reply_text(fallback_text)
+            else:
+                await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
     async def stream_episode_callback(self, query, drama_id: str, episode_num: int, user_id: int):
         """Handle episode streaming"""
@@ -349,6 +363,12 @@ Upgrade ke premium untuk menonton tanpa batas:
         if not is_premium and remaining_watches <= 0:
             # Show premium packages if no free watches left
             await self.show_packages_callback(query)
+            return
+        
+        # Get drama details
+        drama = await self.get_drama_details(drama_id)
+        if not drama:
+            await query.edit_message_text("❌ Drama tidak ditemukan.")
             return
         
         # Get episode URL from S3
@@ -373,14 +393,13 @@ Upgrade ke premium untuk menonton tanpa batas:
 
         await query.edit_message_text(text)
 
-        # Send video file
+        # Send video URL as document/link
         try:
-            caption = f"🎬 Episode {episode_num}\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
-            await query.message.reply_video(
-                video=episode_url,
+            caption = f"🎬 Episode {episode_num}\n📺 Status: {watch_status}\n\n📁 Klik link di bawah untuk download/streaming:\n{episode_url}\n\nSelamat menonton! 🎭"
+            await query.message.reply_document(
+                document=episode_url,
                 caption=caption,
-                supports_streaming=True,
-                protect_content=True
+                filename=f"Episode_{episode_num}.mp4"
             )
             
             # Add buttons based on premium status
@@ -421,14 +440,21 @@ Upgrade ke premium untuk menonton tanpa batas:
                 await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
             
         except Exception as e:
+            traceback.print_exc()
             await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+            # Fallback: send text message with video URL if available
+            if 'episode_url' in locals() and episode_url:
+                fallback_text = f"🎬 {drama['title']} - Episode {episode_num}\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                await query.message.reply_text(fallback_text)
+            else:
+                await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
     async def next_episode_callback(self, query, drama_id: str, current_episode: int, user_id: int):
         """Handle next episode streaming"""
         next_episode = current_episode + 1
         
         # Get drama details to check if next episode exists
-        drama = await self.get_drama_details(drama_id)
+        drama = self.get_drama_details(drama_id)
         if not drama:
             await query.edit_message_text("❌ Drama tidak ditemukan.")
             return
@@ -470,7 +496,7 @@ Pilih paket yang sesuai:
             return
         
         # Get next episode URL from S3
-        episode_url = await self.get_episode_url(drama_id, next_episode)
+        episode_url = self.get_episode_url(drama_id, next_episode)
         if not episode_url:
             await query.edit_message_text(f"❌ Episode {next_episode} tidak tersedia.")
             return
@@ -491,14 +517,13 @@ Pilih paket yang sesuai:
 
         await query.edit_message_text(text)
 
-        # Send video file
+        # Send video URL as document/link
         try:
-            caption = f"🎬 {drama['title']} - Episode {next_episode}\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
-            await query.message.reply_video(
-                video=episode_url,
+            caption = f"🎬 {drama['title']} - Episode {next_episode}\n📺 Status: {watch_status}\n\n📁 Klik link di bawah untuk download/streaming:\n{episode_url}\n\nSelamat menonton! 🎭"
+            await query.message.reply_document(
+                document=episode_url,
                 caption=caption,
-                supports_streaming=True,
-                protect_content=True
+                filename=f"{drama['title']}_Episode_{next_episode}.mp4"
             )
             
             # Add buttons based on premium status
@@ -539,7 +564,14 @@ Upgrade ke premium untuk menonton tanpa batas:
                 await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
             
         except Exception as e:
+            traceback.print_exc()
             await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+            # Fallback: send text message with video URL if available
+            if 'episode_url' in locals() and episode_url:
+                fallback_text = f"🎬 {drama['title']} - Episode {next_episode}\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                await query.message.reply_text(fallback_text)
+            else:
+                await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
     async def show_packages_callback(self, query):
         """Show premium packages"""
@@ -584,6 +616,28 @@ Kirim bukti transfer ke @admin
 
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
+    async def get_total_eps(self, drama_id: str) -> int:
+        """Get total episodes for a drama from S3"""
+                
+        # Replace these placeholders with your credentials
+        # Initialize the S3 client
+        _s3_client = boto3.client(
+            's3',
+            aws_access_key_id=S3_ACCESS_KEY,
+            aws_secret_access_key=S3_SECRET_KEY,
+            endpoint_url=S3_ENDPOINT
+        )
+
+        bucket_name = 'drama'
+        prefix = f"{drama_id}/"
+        try:
+            response = _s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter='/')
+            folders = response.get('CommonPrefixes', [])
+            total_folders = len(folders)
+            return total_folders
+        except Exception as e:
+            print(f"Error: {e}")
+
     async def select_package_callback(self, query, package_type: str, user_id: int):
         """Handle package selection"""
         package_info = {
@@ -600,7 +654,7 @@ Kirim bukti transfer ke @admin
         pkg = package_info[package_type]
 
         # Generate payment code for tracking
-        payment_code = await self.generate_payment_code(user_id, package_type)
+        payment_code = self.generate_payment_code(user_id, package_type)
         
         text = f"""
 🎟️ *PAKET {pkg['name'].upper()}*
@@ -688,9 +742,9 @@ Kirim bukti transfer ke @admin
 
     async def get_episode_url(self, drama_id: str, episode_num: int, drama_title: str = None) -> str:
         """Get presigned URL for episode video"""
-        return self.generate_presigned_url(drama_id, episode_num, drama_title)
+        return await self.generate_presigned_url(drama_id, episode_num, drama_title)
     # Database operations
-    def generate_presigned_url(self, drama_id: str, episode_num: int, drama_title: str = None) -> str:
+    async def generate_presigned_url(self, drama_id: str, episode_num: int, drama_title: str = None) -> str:
         """Generate presigned URL for S3 video file"""
         try:
             bucket_name = 'drama'
@@ -976,34 +1030,8 @@ Kirim bukti transfer ke @admin
 
     async def get_episode_count_from_s3(self, drama_id: str) -> int:
         """Get actual episode count from S3 bucket"""
-        try:
-            bucket_name = 'drama'
-            prefix = f"{drama_id}/"
+        return await self.get_total_eps(drama_id)
             
-            # List objects in the drama folder
-            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
-            
-            if 'Contents' not in response:
-                return 12  # Default fallback
-            
-            episode_numbers = []
-            for obj in response['Contents']:
-                key = obj['Key']
-                # Extract episode number from key like "drama_id/episode_X/filename.mp4"
-                if '/episode_' in key and key.endswith('.mp4'):
-                    try:
-                        episode_part = key.split('/episode_')[1].split('/')[0]
-                        episode_num = int(episode_part)
-                        episode_numbers.append(episode_num)
-                    except (ValueError, IndexError):
-                        continue
-            
-            return max(episode_numbers) if episode_numbers else 12
-            
-        except Exception as e:
-            print(f"Error getting episode count from S3: {e}")
-            return 12  # Default fallback
-
     # Callback handlers
     async def show_dramas_callback(self, query):
         """Handle show dramas callback"""
@@ -1079,17 +1107,7 @@ Kirim pesan ke admin jika ada masalah
 
         await query.edit_message_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
 
-    async def get_total_eps(self, drama_id: str) -> int:
-        """Get total episodes for a drama from S3"""
-        bucket_name = 'drama'
-        prefix = f"{drama_id}/"
-        try:
-            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter='/')
-            folders = response.get('CommonPrefixes', [])
-            total_folders = len(folders)
-            return total_folders
-        except Exception as e:
-            print(f"Error: {e}")
+    
 
     async def back_to_main_callback(self, query):
         """Handle back to main callback"""
