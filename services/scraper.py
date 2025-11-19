@@ -393,9 +393,8 @@ def scrape_by_url(url, book_id):
             print(f"Items found with requests + BeautifulSoup: {len(requests_items)}")
             print(f"Items found with Playwright: {len(playwright_items)}")
             print("="*50)
-            
             print("Browser will remain open. Close it manually or press Ctrl+C to exit.")
-        browser.close()
+            browser.close() 
 
 
 # def main():
