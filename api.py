@@ -43,6 +43,11 @@ app = FastAPI()
 def read_root():
     return {"Hello": "World"}
 
+@app.get("/all")
+def get_all_dramas(limit: int = 10, offset: int = 0):
+    dramas = supabase.table('Drama').select('*').range(offset, offset + limit - 1).execute()
+    return {"dramas": dramas.data}
+
 @app.get("/search/{name}")
 def search(name: str):
     url = f'https://www.dramaboxdb.com/in/search?searchValue={name}'
