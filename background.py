@@ -4,13 +4,19 @@ from services.scraper import scrape_by_url
 import os, shutil
 
 if __name__ == "__main__":
+    sort = input("Start scraping dramas? (y/n): ")
+    
     while True:
         for item in os.listdir('.'):
             if item.startswith('browser_data') and os.path.isdir(item):
                 shutil.rmtree(item)
                 print(f"Removed directory: {item}")
         supabase = get_supabase_client()
-        list_drama = supabase.table('Drama').select('*').eq('has_downloaded', False).limit(10).execute()
+        list_drama = None
+        if sort.lower() == 'y':
+            list_drama = supabase.table('Drama').select('*').eq('has_downloaded', False).limit(10).execute()
+        else:
+            list_drama = supabase.table('Drama').select('*').eq('has_downloaded', False).order('id', desc=True).limit(10).execute()
         if not list_drama.data or len(list_drama.data) == 0:
             print("All dramas have been processed. Exiting.")
             break
