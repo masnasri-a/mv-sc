@@ -71,7 +71,7 @@ class DramaBot:
         """Handle /start command"""
         user = update.effective_user
         user_id: int = user.id
-
+        print("User started bot:", user_id, user.username)
         # Create or update user in database
         await self.create_or_update_user(user_id, user.username, user.first_name)
         
@@ -1187,7 +1187,7 @@ Kirim bukti transfer ke @admin
         try:
             # Check if user exists
             result = supabase.table('users').select('*').eq('telegram_id', user_id).execute()
-
+            print("User lookup result:", result)
             if not result.data:
                 # Create new user
                 user_data = {
