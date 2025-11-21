@@ -3,7 +3,8 @@ import json
 import asyncio
 import boto3
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from typing import Dict, List, Optional, Any
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, CallbackQuery, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from supabase import create_client, Client
 from config.db import get_supabase_client
@@ -44,28 +45,41 @@ class DramaBot:
         self.application = ApplicationBuilder().token(BOT_TOKEN).build()
         self.setup_handlers()
 
-    def setup_handlers(self):
+    def setup_handlers(self) -> None:
         """Setup all bot handlers"""
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("dramas", self.show_dramas))
+        self.application.add_handler(CommandHandler("cari", self.search_dramas))
+        self.application.add_handler(CommandHandler("commands", self.show_commands))
         self.application.add_handler(CommandHandler("admin", self.admin_panel))
         self.application.add_handler(CallbackQueryHandler(self.handle_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
 
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def setup_bot_commands(self) -> None:
+        """Setup bot command menu for Telegram"""
+        commands = [
+            BotCommand("start", "🏠 Mulai menggunakan bot"),
+            BotCommand("dramas", "📺 Lihat semua drama tersedia"),
+            BotCommand("cari", "🔍 Cari drama berdasarkan nama"),
+            BotCommand("commands", "📋 Lihat semua perintah"),
+            BotCommand("help", "ℹ️ Bantuan cara penggunaan"),
+        ]
+        await self.application.bot.set_my_commands(commands)
+
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command"""
         user = update.effective_user
-        user_id = user.id
+        user_id: int = user.id
 
         # Create or update user in database
         await self.create_or_update_user(user_id, user.username, user.first_name)
         
         # Get user's watch count
-        watch_info = await self.get_user_watch_count(user_id)
-        free_watches_used = watch_info['used']
-        free_watches_limit = watch_info['limit']
-        remaining_watches = free_watches_limit - free_watches_used
+        watch_info: Dict[str, int] = await self.get_user_watch_count(user_id)
+        free_watches_used: int = watch_info['used']
+        free_watches_limit: int = watch_info['limit']
+        remaining_watches: int = free_watches_limit - free_watches_used
         print("User watch info:", watch_info)
         # Get 3 random dramas to display
         dramas = await self.get_featured_dramas(3)
@@ -103,29 +117,53 @@ class DramaBot:
             
         keyboard.extend([
             [InlineKeyboardButton("📺 Semua Drama", callback_data="show_dramas")],
+            [InlineKeyboardButton("🔍 Cari Drama", callback_data="search_dramas")],
             [InlineKeyboardButton("💰 Paket Premium", callback_data="show_packages")],
             [InlineKeyboardButton("ℹ️ Bantuan", callback_data="help")]
         ])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        
+        # Send with first drama's cover if available
+        if dramas and dramas[0].get('cover'):
+            await update.message.reply_photo(
+                photo=dramas[0]['cover'],
+                caption=welcome_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
 
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command"""
-        help_text = """
+        help_text: str = """
 🎬 *DRAMA CINA GRATIS BOT*
 
-📋 *Cara Penggunaan:*
+📋 *Perintah yang Tersedia:*
+• `/start` - Mulai menggunakan bot
+• `/dramas` - Lihat semua drama tersedia
+• `/cari [nama]` - Cari drama berdasarkan nama
+• `/commands` - Lihat semua perintah
+• `/help` - Bantuan cara penggunaan
+
+📺 *Cara Penggunaan:*
 1. Gunakan /start untuk memulai
 2. Pilih drama yang ingin ditonton
 3. Tonton gratis hingga limit tercapai
-4. Untuk tontonan lebih banyak, hubungi admin
+4. Untuk tontonan lebih banyak, upgrade premium
+
+🔍 *Cara Mencari Drama:*
+• Ketik `/cari suara hati`
+• Atau gunakan tombol "🔍 Cari Drama"
+• Pencarian tidak case-sensitive
 
 📺 *Fitur:*
 • Streaming drama Cina terbaru
 • Kualitas HD
 • Subtitle Indonesia
 • Tontonan gratis 1x per minggu
+• Pencarian drama by nama
 
 💰 *Premium:*
 Untuk akses unlimited, hubungi @admin
@@ -135,12 +173,108 @@ Kirim pesan ke admin jika ada masalah
         """
         await update.message.reply_text(help_text, parse_mode='Markdown')
 
-    async def show_dramas(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def search_dramas(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /cari command for searching dramas"""
+        user_id: int = update.effective_user.id
+        
+        # Get the search query from command arguments
+        search_query: str = ' '.join(context.args) if context.args else ''
+        
+        if not search_query:
+            help_text: str = """
+🔍 *CARA MENCARI DRAMA*
+
+Gunakan perintah:
+`/cari [nama drama]`
+
+Contoh:
+• `/cari suara hati`
+• `/cari penguasa yang bangkit`
+• `/cari sekali rayu`
+
+Atau gunakan tombol di bawah untuk mencari:
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("🔍 Cari Drama", callback_data="search_dramas")],
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
+            return
+        
+        # Search for dramas
+        search_results: List[Dict[str, Any]] = await self.search_dramas_by_name(search_query)
+        
+        if not search_results:
+            no_result_text: str = f"""
+🔍 *HASIL PENCARIAN*
+
+Tidak ditemukan drama dengan kata kunci: "{search_query}"
+
+💡 Tips pencarian:
+• Coba kata kunci yang lebih pendek
+• Periksa ejaan kata kunci
+• Gunakan kata kunci utama saja
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("🔍 Cari Lagi", callback_data="search_dramas")],
+                [InlineKeyboardButton("📺 Semua Drama", callback_data="show_dramas")],
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(no_result_text, reply_markup=reply_markup, parse_mode='Markdown')
+            return
+        
+        # Display search results
+        await self.display_search_results(update, search_query, search_results, user_id)
+
+    async def show_commands(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show all available commands"""
+        commands_text: str = """
+📋 *DAFTAR PERINTAH BOT*
+
+🏠 `/start`
+Mulai menggunakan bot dan kembali ke menu utama
+
+📺 `/dramas`
+Lihat semua drama yang tersedia untuk ditonton
+
+🔍 `/cari [nama drama]`
+Cari drama berdasarkan nama (tidak case-sensitive)
+Contoh: `/cari suara hati`
+
+📋 `/commands`
+Tampilkan daftar perintah ini
+
+ℹ️ `/help`
+Bantuan lengkap cara menggunakan bot
+
+💡 *Tips:*
+• Gunakan tombol menu untuk navigasi yang mudah
+• Ketik nama drama langsung untuk mencari
+• Upgrade premium untuk akses unlimited
+
+🎬 Selamat menikmati drama!
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")],
+            [InlineKeyboardButton("ℹ️ Bantuan Lengkap", callback_data="help")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(commands_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    async def show_dramas(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show available dramas"""
-        user_id = update.effective_user.id
+        user_id: int = update.effective_user.id
         
         # Get user's watch count
-        watch_info = await self.get_user_watch_count(user_id)
+        watch_info: Dict[str, int] = await self.get_user_watch_count(user_id)
         free_watches_used = watch_info['used']
         free_watches_limit = watch_info['limit']
         remaining_watches = free_watches_limit - free_watches_used
@@ -174,16 +308,20 @@ Kirim pesan ke admin jika ada masalah
 
         await update.message.reply_text(text, reply_markup=reply_markup)
 
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle callback queries from inline keyboards"""
-        query = update.callback_query
+        query: CallbackQuery = update.callback_query
         await query.answer()
 
-        user_id = query.from_user.id
-        data = query.data
+        user_id: int = query.from_user.id
+        data: str = query.data
 
         if data == "show_dramas":
             await self.show_dramas_callback(query)
+        elif data == "search_dramas":
+            await self.search_dramas_callback(query)
+        elif data == "commands":
+            await self.show_commands_callback(query)
         elif data == "show_packages":
             await self.show_packages_callback(query)
         elif data == "help":
@@ -208,11 +346,14 @@ Kirim pesan ke admin jika ada masalah
         elif data.startswith("select_episodes_"):
             drama_id = data.split("_")[2]
             await self.select_episodes_callback(query, drama_id, user_id)
+        elif data.startswith("package_"):
+            package_type = data.split("_")[1]
+            await self.select_package_callback(query, package_type, user_id)
 
-    async def select_drama_callback(self, query, drama_id: str, user_id: int):
+    async def select_drama_callback(self, query: CallbackQuery, drama_id: str, user_id: int) -> None:
         """Handle drama selection"""
         # Get drama details
-        drama = await self.get_drama_details(drama_id)
+        drama: Optional[Dict[str, Any]] = await self.get_drama_details(drama_id)
         if not drama:
             await query.edit_message_text("❌ Drama tidak ditemukan.")
             return
@@ -228,8 +369,11 @@ Kirim pesan ke admin jika ada masalah
 Pilih episode yang ingin ditonton:
         """
 
+        # For non-premium users, only show episode 1
+        max_episodes = 1 if not await self.check_user_premium_status(user_id) and user_id not in ADMIN_WHITELIST else drama.get('episodes', 0)
+        
         keyboard = []
-        for i in range(1, min(drama.get('episodes', 0) + 1, 11)):  # Show max 10 episodes
+        for i in range(1, min(max_episodes + 1, 11)):  # Show max 10 episodes or only episode 1 for non-premium
             keyboard.append([
                 InlineKeyboardButton(f"Episode {i}", callback_data=f"episode_{drama_id}_{i}")
             ])
@@ -240,19 +384,36 @@ Pilih episode yang ingin ditonton:
         keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data="show_dramas")])
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        # Check if the original message has text or is a photo
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception as e:
+            if "no text in the message to edit" in str(e).lower():
+                # If original message was a photo, edit the caption instead
+                try:
+                    await query.edit_message_caption(
+                        caption=text,
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                except Exception:
+                    # If that fails too, send a new message
+                    await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            else:
+                # For other errors, try sending a new message
+                await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
-    async def select_featured_drama_callback(self, query, drama_id: str, user_id: int):
+    async def select_featured_drama_callback(self, query: CallbackQuery, drama_id: str, user_id: int) -> None:
         """Handle featured drama selection - directly stream episode 1"""
         # Check watch count first
-        watch_info = await self.get_user_watch_count(user_id)
+        watch_info: Dict[str, int] = await self.get_user_watch_count(user_id)
         print("Watch info for featured drama:", watch_info)
-        free_watches_used = watch_info['used']
-        free_watches_limit = watch_info['limit']
-        remaining_watches = free_watches_limit - free_watches_used
+        free_watches_used: int = watch_info['used']
+        free_watches_limit: int = watch_info['limit']
+        remaining_watches: int = free_watches_limit - free_watches_used
         
         # Check if user has premium
-        is_premium = await self.check_user_premium_status(user_id)
+        is_premium: bool = await self.check_user_premium_status(user_id)
         
         if not is_premium and remaining_watches <= 0:
             # Show premium packages if no free watches left
@@ -266,7 +427,7 @@ Pilih episode yang ingin ditonton:
             return
         
         # Get episode 1 URL from S3
-        episode_url = await self.get_episode_url(drama_id, 1, drama.get('title', 'Unknown'))
+        episode_url = await self.get_episode_url(drama_id, 1)
         if not episode_url:
             await query.edit_message_text("❌ Episode tidak tersedia atau sedang dalam proses upload.")
             return
@@ -285,8 +446,8 @@ Pilih episode yang ingin ditonton:
 📹 Link streaming sedang diproses...
         """
 
-        await query.edit_message_text(text)
-
+        # Edit the caption since the original message is a photo
+       
         # Send video file
         try:
             if not episode_url:
@@ -309,8 +470,12 @@ Pilih episode yang ingin ditonton:
             # Add buttons based on premium status
             keyboard = []
             
-            # Always add "Selanjutnya" button
-            keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_1")])
+            # Only add "Selanjutnya" button for premium users on episode 1
+            if is_premium:
+                keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_1")])
+            else:
+                # Add upgrade button instead of next for non-premium users
+                keyboard.append([InlineKeyboardButton("🔓 Unlock Episode 2+", callback_data="show_packages")])
             
             # Add episode selection for premium users
             if is_premium:
@@ -353,16 +518,38 @@ Upgrade ke premium untuk menonton tanpa batas:
             else:
                 await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
-    async def stream_episode_callback(self, query, drama_id: str, episode_num: int, user_id: int):
+    async def stream_episode_callback(self, query: CallbackQuery, drama_id: str, episode_num: int, user_id: int) -> None:
         """Handle episode streaming"""
         # Check watch count first
-        watch_info = await self.get_user_watch_count(user_id)
-        free_watches_used = watch_info['used']
-        free_watches_limit = watch_info['limit']
-        remaining_watches = free_watches_limit - free_watches_used
+        watch_info: Dict[str, int] = await self.get_user_watch_count(user_id)
+        free_watches_used: int = watch_info['used']
+        free_watches_limit: int = watch_info['limit']
+        remaining_watches: int = free_watches_limit - free_watches_used
         
         # Check if user has premium
-        is_premium = await self.check_user_premium_status(user_id)
+        is_premium: bool = await self.check_user_premium_status(user_id)
+        
+        # Block non-premium users from episode 2 and beyond
+        if not is_premium and episode_num > 1:
+            text = """
+🔒 *EPISODE PREMIUM*
+
+Episode 2 dan selanjutnya hanya untuk pengguna premium!
+
+💰 Upgrade sekarang untuk menonton semua episode:
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
+                [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
+                [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
+                [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
+                [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            return
         
         if not is_premium and remaining_watches <= 0:
             # Show premium packages if no free watches left
@@ -370,7 +557,7 @@ Upgrade ke premium untuk menonton tanpa batas:
             return
         drama = await self.get_drama_details(drama_id)
         # Get episode URL from S3
-        episode_url = await self.get_episode_url(drama_id, episode_num, drama.get('title', 'Unknown'))
+        episode_url = await self.get_episode_url(drama_id, episode_num)
         if not episode_url:
             await query.edit_message_text("❌ Episode tidak tersedia.")
             return
@@ -407,8 +594,12 @@ Upgrade ke premium untuk menonton tanpa batas:
             # Add buttons based on premium status
             keyboard = []
             
-            # Always add "Selanjutnya" button
-            keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_{episode_num}")])
+            # Only add "Selanjutnya" button for premium users
+            if is_premium:
+                keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_{episode_num}")])
+            elif episode_num == 1:
+                # For non-premium users on episode 1, show upgrade button instead
+                keyboard.append([InlineKeyboardButton("🔓 Unlock Episode 2+", callback_data="show_packages")])
             
             # Add episode selection for premium users
             if is_premium:
@@ -452,19 +643,19 @@ Upgrade ke premium untuk menonton tanpa batas:
             else:
                 await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
-    async def next_episode_callback(self, query, drama_id: str, current_episode: int, user_id: int):
+    async def next_episode_callback(self, query: CallbackQuery, drama_id: str, current_episode: int, user_id: int) -> None:
         """Handle next episode streaming"""
-        next_episode = current_episode + 1
+        next_episode: int = current_episode + 1
         
         # Get drama details to check if next episode exists
-        drama = await self.get_drama_details(drama_id)
+        drama: Optional[Dict[str, Any]] = await self.get_drama_details(drama_id)
         if not drama:
             await query.edit_message_text("❌ Drama tidak ditemukan.")
             return
         
         # Check if next episode exists (assuming max 12 episodes for now)
         if next_episode > drama.get('episodes', 0):
-            await query.edit_message_text("🎬 Sudah mencapai episode terakhir!\n\nGunakan /start untuk kembali ke menu utama.")
+            await self.safe_edit_message(query, "🎬 Sudah mencapai episode terakhir!\n\nGunakan /start untuk kembali ke menu utama.")
             return
         
         # Check watch count first
@@ -475,6 +666,28 @@ Upgrade ke premium untuk menonton tanpa batas:
         
         # Check if user has premium
         is_premium = await self.check_user_premium_status(user_id)
+        
+        # For non-premium users, block access to episode 2 and beyond
+        if not is_premium and next_episode > 1:
+            text = """
+🔒 *EPISODE PREMIUM*
+
+Episode 2 dan selanjutnya hanya untuk pengguna premium!
+
+💰 Upgrade sekarang untuk menonton semua episode:
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
+                [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
+                [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
+                [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
+                [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            return
         
         if not is_premium and remaining_watches <= 0:
             # Force payment - redirect to package selection
@@ -499,7 +712,7 @@ Pilih paket yang sesuai:
             return
         
         # Get next episode URL from S3
-        episode_url = await self.get_episode_url(drama_id, next_episode, drama.get('title', 'Unknown'))
+        episode_url = await self.get_episode_url(drama_id, next_episode)
         if not episode_url:
             await query.edit_message_text(f"❌ Episode {next_episode} tidak tersedia.")
             return
@@ -580,9 +793,9 @@ Upgrade ke premium untuk menonton tanpa batas:
             else:
                 await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
-    async def show_packages_callback(self, query):
+    async def show_packages_callback(self, query: CallbackQuery) -> None:
         """Show premium packages"""
-        text = """
+        text: str = """
 💰 *PAKET PREMIUM DRAMA CINA*
 
 Pilih paket yang sesuai kebutuhan Anda:
@@ -645,9 +858,9 @@ Kirim bukti transfer ke @admin
         except Exception as e:
             print(f"Error: {e}")
 
-    async def select_package_callback(self, query, package_type: str, user_id: int):
+    async def select_package_callback(self, query: CallbackQuery, package_type: str, user_id: int) -> None:
         """Handle package selection"""
-        package_info = {
+        package_info: Dict[str, Dict[str, str]] = {
             "1day": {"name": "1 Hari", "price": "Rp 3.000", "duration": "24 jam"},
             "7day": {"name": "7 Hari", "price": "Rp 10.000", "duration": "1 minggu"},
             "30day": {"name": "30 Hari", "price": "Rp 25.000", "duration": "1 bulan"},
@@ -661,7 +874,7 @@ Kirim bukti transfer ke @admin
         pkg = package_info[package_type]
 
         # Generate payment code for tracking
-        payment_code = self.generate_payment_code(user_id, package_type)
+        payment_code = await self.generate_payment_code(user_id, package_type)
         
         text = f"""
 🎟️ *PAKET {pkg['name'].upper()}*
@@ -700,10 +913,10 @@ Kirim bukti transfer ke @admin
 
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
-    async def select_episodes_callback(self, query, drama_id: str, user_id: int):
+    async def select_episodes_callback(self, query: CallbackQuery, drama_id: str, user_id: int) -> None:
         """Handle episode selection for premium users"""
         # Check if user is premium
-        is_premium = await self.check_user_premium_status(user_id)
+        is_premium: bool = await self.check_user_premium_status(user_id)
         if not is_premium and user_id not in ADMIN_WHITELIST:
             await query.edit_message_text("❌ Fitur ini hanya untuk pengguna premium.")
             return
@@ -745,16 +958,66 @@ Kirim bukti transfer ke @admin
         keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"drama_{drama_id}")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-
-    async def get_episode_url(self, drama_id: str, episode_num: int, drama_title: str) -> str:
-        """Get presigned URL for episode video"""
-        return await self.generate_presigned_url(drama_id, episode_num, drama_title)
-    # Database operations
-    async def generate_presigned_url(self, drama_id: str, episode_num: int, drama_title) -> str:
-        """Generate presigned URL for S3 video file"""
+        
+        # Check if the original message has text or is a photo
         try:
-            bucket_name = 'drama'
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception as e:
+            if "no text in the message to edit" in str(e).lower():
+                # If original message was a photo, edit the caption instead
+                try:
+                    await query.edit_message_caption(
+                        caption=text,
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                except Exception:
+                    # If that fails too, send a new message
+                    await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            else:
+                # For other errors, try sending a new message
+                await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    async def get_episode_url(self, drama_id: str, episode_num: int, drama_title: Optional[str] = None) -> Optional[str]:
+        """Get presigned URL for episode video using episodes table"""
+        try:
+            # Get episode key from episodes table
+            result: Any = supabase.table('episodes').select('key').eq('drama_id', int(drama_id)).eq('episode', episode_num).execute()
+            
+            if result.data and len(result.data) > 0:
+                s3_key = result.data[0]['key']
+                return await self.generate_presigned_url_from_key(s3_key)
+            else:
+                print(f"Episode not found: drama_id={drama_id}, episode={episode_num}")
+                return None
+        except Exception as e:
+            print(f"Error getting episode URL: {e}")
+            return None
+    # Database operations
+    async def generate_presigned_url_from_key(self, s3_key: str) -> Optional[str]:
+        """Generate presigned URL from S3 key"""
+        try:
+            bucket_name: str = 'drama'
+            key: str = s3_key.replace('https://s3.nevaobjects.id/drama/', '')
+            
+            # Generate presigned URL (expires in 1 hour)
+            presigned_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': bucket_name, 'Key': key},
+                ExpiresIn=3600  # URL expires in 1 hour
+            )
+            
+            print(f"Generated presigned URL for {s3_key}: {presigned_url}")
+            return presigned_url
+            
+        except Exception as e:
+            print(f"Error generating presigned URL: {e}")
+            return None
+
+    async def generate_presigned_url(self, drama_id: str, episode_num: int, drama_title: Optional[str]) -> str:
+        """Generate presigned URL for S3 video file (legacy method)"""
+        try:
+            bucket_name: str = 'drama'
             
             # Create S3 key based on drama structure
             # Format: drama_id/episode_X/Drama_Title_ep_X.mp4
@@ -779,7 +1042,7 @@ Kirim bukti transfer ke @admin
             # Fallback to direct S3 URL
             return f"{S3_ENDPOINT}/{bucket_name}/{drama_id}/episode_{episode_num}/episode_{episode_num}.mp4"
 
-    async def get_user_watch_count(self, user_id: int) -> dict:
+    async def get_user_watch_count(self, user_id: int) -> Dict[str, int]:
         """Get user's watch count information"""
         # Check if user is in admin whitelist - unlimited access
         if user_id in ADMIN_WHITELIST:
@@ -819,7 +1082,7 @@ Kirim bukti transfer ke @admin
             print(f"Error getting watch count: {e}")
             return {'used': 0, 'limit': 1}
 
-    async def increment_watch_count(self, user_id: int):
+    async def increment_watch_count(self, user_id: int) -> None:
         """Increment user's watch count"""
         # Skip incrementing for whitelisted users
         if user_id in ADMIN_WHITELIST:
@@ -890,7 +1153,7 @@ Kirim bukti transfer ke @admin
             print(f"Error checking premium status: {e}")
             return False
 
-    async def create_payment_record(self, user_id: int, package_type: str) -> int:
+    async def create_payment_record(self, user_id: int, package_type: str) -> Optional[int]:
         """Create payment record for tracking"""
         if not supabase:
             return None
@@ -916,7 +1179,7 @@ Kirim bukti transfer ke @admin
             print(f"Error creating payment record: {e}")
             return None
 
-    async def create_or_update_user(self, user_id: int, username: str, first_name: str):
+    async def create_or_update_user(self, user_id: int, username: Optional[str], first_name: str) -> None:
         """Create or update user in database"""
         if not supabase:
             return
@@ -948,7 +1211,7 @@ Kirim bukti transfer ke @admin
         except Exception as e:
             print(f"Error creating/updating user: {e}")
 
-    async def get_featured_dramas(self, limit: int = 3):
+    async def get_featured_dramas(self, limit: int = 3) -> List[Dict[str, Any]]:
         """Get featured dramas from Drama table"""
 
         if not supabase:
@@ -961,6 +1224,7 @@ Kirim bukti transfer ke @admin
             # Format data to match expected structure
             dramas = []
             for drama in result.data:
+                total_episodes = await self.get_total_eps(str(drama['id']))
                 dramas.append({
                     'id': str(drama['id']),
                     'title': drama['book_name'],
@@ -968,7 +1232,7 @@ Kirim bukti transfer ke @admin
                     'book_name_en': drama['book_name_en'],
                     'cover': drama['cover'],
                     'chapter_id': drama['chapter_id'],
-                    'episodes': 12  # Default episodes, can be calculated if needed
+                    'episodes': total_episodes  # Default episodes, can be calculated if needed
                 })
             
             return dramas
@@ -976,7 +1240,7 @@ Kirim bukti transfer ke @admin
             print(f"Error getting featured dramas: {e}")
             return []
 
-    async def get_available_dramas(self):
+    async def get_available_dramas(self) -> List[Dict[str, Any]]:
         """Get available dramas from Drama table"""
         print("Fetching available dramas...")
         if not supabase:
@@ -989,6 +1253,7 @@ Kirim bukti transfer ke @admin
             # Format data to match expected structure
             dramas = []
             for drama in result.data:
+                total_episodes = await self.get_total_eps(str(drama['id']))
                 dramas.append({
                     'id': str(drama['id']),
                     'title': drama['book_name'],
@@ -996,7 +1261,7 @@ Kirim bukti transfer ke @admin
                     'book_name_en': drama['book_name_en'],
                     'cover': drama['cover'],
                     'chapter_id': drama['chapter_id'],
-                    'episodes': 12,  # Default episodes
+                    'episodes': total_episodes,  # Default episodes
                     'genre': 'Drama',  # Default genre
                     'rating': 9.0  # Default rating
                 })
@@ -1006,7 +1271,7 @@ Kirim bukti transfer ke @admin
             print(f"Error getting dramas: {e}")
             return []
 
-    async def get_drama_details(self, drama_id: str):
+    async def get_drama_details(self, drama_id: str) -> Optional[Dict[str, Any]]:
         """Get drama details from Drama table"""
         if not supabase:
             return None
@@ -1034,17 +1299,318 @@ Kirim bukti transfer ke @admin
             print(f"Error getting drama details: {e}")
             return None
 
+    async def safe_edit_message(self, query: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = None) -> None:
+        """Safely edit message text or caption depending on message type"""
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception as e:
+            if "no text in the message to edit" in str(e).lower():
+                # If original message was a photo, edit the caption instead
+                try:
+                    await query.edit_message_caption(
+                        caption=text,
+                        reply_markup=reply_markup,
+                        parse_mode=parse_mode
+                    )
+                except Exception:
+                    # If that fails too, send a new message
+                    await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            else:
+                # For other errors, try sending a new message
+                await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+    async def search_dramas_by_name(self, search_query: str) -> List[Dict[str, Any]]:
+        """Search dramas by book_name with case-insensitive matching"""
+        if not supabase:
+            return []
+        
+        try:
+            # Clean and prepare search query
+            clean_query: str = search_query.strip().lower()
+            
+            # Get all available dramas first
+            result = supabase.table('Drama').select('id, book_name, book_name_en, cover, chapter_id').eq('has_downloaded', True).execute()
+            
+            if not result.data:
+                return []
+            
+            # Filter results based on case-insensitive search
+            filtered_dramas: List[Dict[str, Any]] = []
+            
+            for drama in result.data:
+                book_name_lower: str = drama['book_name'].lower() if drama['book_name'] else ''
+                book_name_en_lower: str = drama['book_name_en'].lower() if drama['book_name_en'] else ''
+                
+                # Check if search query is found in either book_name or book_name_en
+                if (clean_query in book_name_lower or 
+                    clean_query in book_name_en_lower or
+                    any(word in book_name_lower for word in clean_query.split()) or
+                    any(word in book_name_en_lower for word in clean_query.split())):
+                    
+                    # Get episode count for this drama
+                    episode_count: int = await self.get_episode_count_from_s3(str(drama['id']))
+                    
+                    filtered_dramas.append({
+                        'id': str(drama['id']),
+                        'title': drama['book_name'],
+                        'book_name': drama['book_name'],
+                        'book_name_en': drama['book_name_en'],
+                        'cover': drama['cover'],
+                        'chapter_id': drama['chapter_id'],
+                        'episodes': episode_count,
+                        'genre': 'Drama',
+                        'rating': 9.0
+                    })
+            
+            # Sort by relevance (exact matches first, then partial matches)
+            def relevance_score(drama_item: Dict[str, Any]) -> int:
+                score: int = 0
+                book_name_lower: str = drama_item['book_name'].lower()
+                
+                # Exact match gets highest score
+                if clean_query == book_name_lower:
+                    score += 100
+                # Match at beginning gets high score
+                elif book_name_lower.startswith(clean_query):
+                    score += 50
+                # Contains match gets medium score
+                elif clean_query in book_name_lower:
+                    score += 25
+                # Word match gets lower score
+                else:
+                    score += 10
+                    
+                return score
+            
+            filtered_dramas.sort(key=relevance_score, reverse=True)
+            
+            return filtered_dramas[:20]  # Limit to 20 results
+            
+        except Exception as e:
+            print(f"Error searching dramas: {e}")
+            return []
+
+    async def display_search_results(self, update: Update, search_query: str, results: List[Dict[str, Any]], user_id: int) -> None:
+        """Display search results to user"""
+        # Get user status
+        watch_info: Dict[str, int] = await self.get_user_watch_count(user_id)
+        is_premium: bool = await self.check_user_premium_status(user_id)
+        
+        results_count: int = len(results)
+        
+        if is_premium or user_id in ADMIN_WHITELIST:
+            status_text: str = "🌟 Premium (Unlimited)" if is_premium else "👑 Admin (Unlimited)"
+        else:
+            remaining_watches: int = watch_info['limit'] - watch_info['used']
+            status_text = f"📺 Gratis ({remaining_watches}/{watch_info['limit']})"
+        
+        search_text: str = f"""
+🔍 *HASIL PENCARIAN*
+
+Kata kunci: "{search_query}"
+📊 Ditemukan: {results_count} drama
+{status_text}
+
+Pilih drama yang ingin ditonton:
+        """
+        
+        keyboard = []
+        
+        # Add drama results (show first 10)
+        for drama in results[:10]:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"🎬 {drama['title'][:40]}{'...' if len(drama['title']) > 40 else ''} (Ep. {drama['episodes']})",
+                    callback_data=f"drama_{drama['id']}"
+                )
+            ])
+        
+        # Add navigation buttons
+        nav_buttons = []
+        if results_count > 10:
+            nav_buttons.append(InlineKeyboardButton(f"📋 Lihat Semua ({results_count})", callback_data="show_dramas"))
+        
+        nav_buttons.extend([
+            InlineKeyboardButton("🔍 Cari Lagi", callback_data="search_dramas"),
+            InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")
+        ])
+        
+        # Add navigation buttons in pairs
+        for i in range(0, len(nav_buttons), 2):
+            if i + 1 < len(nav_buttons):
+                keyboard.append([nav_buttons[i], nav_buttons[i + 1]])
+            else:
+                keyboard.append([nav_buttons[i]])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send with cover image if available
+        if results and results[0].get('cover'):
+            await update.message.reply_photo(
+                photo=results[0]['cover'],
+                caption=search_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(search_text, reply_markup=reply_markup, parse_mode='Markdown')
+        """Search dramas by book_name with case-insensitive matching"""
+        if not supabase:
+            return []
+        
+        try:
+            # Clean and prepare search query
+            clean_query: str = search_query.strip().lower()
+            
+            # Get all available dramas first
+            result = supabase.table('Drama').select('id, book_name, book_name_en, cover, chapter_id').ilike('book_name', f"%{clean_query}%").eq('has_downloaded', True).execute()
+            
+            if not result.data:
+                return []
+            
+            # Filter results based on case-insensitive search
+            filtered_dramas: List[Dict[str, Any]] = []
+            
+            for drama in result.data:
+                book_name_lower: str = drama['book_name'].lower() if drama['book_name'] else ''
+                book_name_en_lower: str = drama['book_name_en'].lower() if drama['book_name_en'] else ''
+                
+                # Check if search query is found in either book_name or book_name_en
+                if (clean_query in book_name_lower or 
+                    clean_query in book_name_en_lower or
+                    any(word in book_name_lower for word in clean_query.split()) or
+                    any(word in book_name_en_lower for word in clean_query.split())):
+                    
+                    # Get episode count for this drama
+                    episode_count: int = await self.get_episode_count_from_s3(str(drama['id']))
+                    
+                    filtered_dramas.append({
+                        'id': str(drama['id']),
+                        'title': drama['book_name'],
+                        'book_name': drama['book_name'],
+                        'book_name_en': drama['book_name_en'],
+                        'cover': drama['cover'],
+                        'chapter_id': drama['chapter_id'],
+                        'episodes': episode_count,
+                        'genre': 'Drama',
+                        'rating': 9.0
+                    })
+            
+            # Sort by relevance (exact matches first, then partial matches)
+            def relevance_score(drama_item: Dict[str, Any]) -> int:
+                score: int = 0
+                book_name_lower: str = drama_item['book_name'].lower()
+                
+                # Exact match gets highest score
+                if clean_query == book_name_lower:
+                    score += 100
+                # Match at beginning gets high score
+                elif book_name_lower.startswith(clean_query):
+                    score += 50
+                # Contains match gets medium score
+                elif clean_query in book_name_lower:
+                    score += 25
+                # Word match gets lower score
+                else:
+                    score += 10
+                    
+                return score
+            
+            filtered_dramas.sort(key=relevance_score, reverse=True)
+            
+            return filtered_dramas[:20]  # Limit to 20 results
+            
+        except Exception as e:
+            print(f"Error searching dramas: {e}")
+            return []
+
+    async def display_search_results(self, update: Update, search_query: str, results: List[Dict[str, Any]], user_id: int) -> None:
+        """Display search results to user"""
+        # Get user status
+        watch_info: Dict[str, int] = await self.get_user_watch_count(user_id)
+        is_premium: bool = await self.check_user_premium_status(user_id)
+        
+        results_count: int = len(results)
+        
+        if is_premium or user_id in ADMIN_WHITELIST:
+            status_text: str = "🌟 Premium (Unlimited)" if is_premium else "👑 Admin (Unlimited)"
+        else:
+            remaining_watches: int = watch_info['limit'] - watch_info['used']
+            status_text = f"📺 Gratis ({remaining_watches}/{watch_info['limit']})"
+        
+        search_text: str = f"""
+🔍 *HASIL PENCARIAN*
+
+Kata kunci: "{search_query}"
+📊 Ditemukan: {results_count} drama
+{status_text}
+
+Pilih drama yang ingin ditonton:
+        """
+        
+        keyboard = []
+        
+        # Add drama results (show first 10)
+        for drama in results[:10]:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"🎬 {drama['title'][:40]}{'...' if len(drama['title']) > 40 else ''} (Ep. {drama['episodes']})",
+                    callback_data=f"drama_{drama['id']}"
+                )
+            ])
+        
+        # Add navigation buttons
+        nav_buttons = []
+        if results_count > 10:
+            nav_buttons.append(InlineKeyboardButton(f"📋 Lihat Semua ({results_count})", callback_data="show_dramas"))
+        
+        nav_buttons.extend([
+            InlineKeyboardButton("🔍 Cari Lagi", callback_data="search_dramas"),
+            InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")
+        ])
+        
+        # Add navigation buttons in pairs
+        for i in range(0, len(nav_buttons), 2):
+            if i + 1 < len(nav_buttons):
+                keyboard.append([nav_buttons[i], nav_buttons[i + 1]])
+            else:
+                keyboard.append([nav_buttons[i]])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send with cover image if available
+        if results and results[0].get('cover'):
+            await update.message.reply_photo(
+                photo=results[0]['cover'],
+                caption=search_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(search_text, reply_markup=reply_markup, parse_mode='Markdown')
+
     async def get_episode_count_from_s3(self, drama_id: str) -> int:
-        """Get actual episode count from S3 bucket"""
-        return await self.get_total_eps(drama_id)
+        """Get actual episode count from episodes table"""
+        try:
+            result = supabase.table('episodes').select('episode').eq('drama_id', int(drama_id)).execute()
+            
+            if result.data:
+                # Get the maximum episode number
+                episodes = [int(ep['episode']) for ep in result.data if ep['episode']]
+                return max(episodes) if episodes else 0
+            else:
+                return 0
+        except Exception as e:
+            print(f"Error getting episode count: {e}")
+            return 0
             
     # Callback handlers
-    async def show_dramas_callback(self, query):
+    async def show_dramas_callback(self, query: CallbackQuery) -> None:
         """Handle show dramas callback"""
-        user_id = query.from_user.id
+        user_id: int = query.from_user.id
         
         # Get user's watch count
-        watch_info = await self.get_user_watch_count(user_id)
+        watch_info: Dict[str, int] = await self.get_user_watch_count(user_id)
         free_watches_used = watch_info['used']
         free_watches_limit = watch_info['limit']
         remaining_watches = free_watches_limit - free_watches_used
@@ -1057,7 +1623,7 @@ Kirim bukti transfer ke @admin
         if not dramas:
             await query.edit_message_text("❌ Maaf, tidak ada drama tersedia saat ini.")
             return
-
+        text: str = ""
         if is_premium:
             if user_id in ADMIN_WHITELIST:
                 text = "📺 Drama Tersedia\n👑 Status: Admin (Unlimited)\n\nPilih drama yang ingin ditonton:"
@@ -1078,11 +1644,106 @@ Kirim bukti transfer ke @admin
         keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")])
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        # Check if the original message has text or is a photo
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup)
+        except Exception as e:
+            if "no text in the message to edit" in str(e).lower():
+                # If original message was a photo, edit the caption instead
+                try:
+                    await query.edit_message_caption(
+                        caption=text,
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                except Exception:
+                    # If that fails too, send a new message
+                    await query.message.reply_text(text, reply_markup=reply_markup)
+            else:
+                # For other errors, try sending a new message
+                await query.message.reply_text(text, reply_markup=reply_markup)
+        except Exception as e:
+            if "no text in the message to edit" in str(e).lower():
+                # If original message was a photo, edit the caption instead
+                try:
+                    await query.edit_message_caption(
+                        caption=text,
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                except Exception:
+                    # If that fails too, send a new message
+                    await query.message.reply_text(text, reply_markup=reply_markup)
+            else:
+                # For other errors, try sending a new message
+                await query.message.reply_text(text, reply_markup=reply_markup)
 
-    async def help_callback(self, query):
+    async def search_dramas_callback(self, query: CallbackQuery) -> None:
+        """Handle search dramas callback"""
+        search_text: str = """
+🔍 *CARI DRAMA*
+
+Kirim nama drama yang ingin Anda cari.
+
+Contoh:
+• Ketik: `Suara Hati`
+• Ketik: `Penguasa Yang Bangkit`
+• Ketik: `Sekali Rayu`
+
+💡 Tips:
+• Pencarian tidak sensitif huruf besar/kecil
+• Bisa menggunakan sebagian nama drama
+• Gunakan kata kunci utama untuk hasil terbaik
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("📺 Lihat Semua Drama", callback_data="show_dramas")],
+            [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await self.safe_edit_message(query, search_text, reply_markup, 'Markdown')
+
+    async def show_commands_callback(self, query: CallbackQuery) -> None:
+        """Handle commands callback"""
+        commands_text: str = """
+📋 *DAFTAR PERINTAH BOT*
+
+🏠 `/start`
+Mulai menggunakan bot dan kembali ke menu utama
+
+📺 `/dramas`
+Lihat semua drama yang tersedia untuk ditonton
+
+🔍 `/cari [nama drama]`
+Cari drama berdasarkan nama (tidak case-sensitive)
+Contoh: `/cari suara hati`
+
+📋 `/commands`
+Tampilkan daftar perintah ini
+
+ℹ️ `/help`
+Bantuan lengkap cara menggunakan bot
+
+💡 *Tips:*
+• Gunakan tombol menu untuk navigasi yang mudah
+• Ketik nama drama langsung untuk mencari
+• Upgrade premium untuk akses unlimited
+
+🎬 Selamat menikmati drama!
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")],
+            [InlineKeyboardButton("ℹ️ Bantuan Lengkap", callback_data="help")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await self.safe_edit_message(query, commands_text, reply_markup, 'Markdown')
+
+    async def help_callback(self, query: CallbackQuery) -> None:
         """Handle help callback"""
-        help_text = """
+        help_text: str = """
 🎬 *DRAMA CINA GRATIS BOT*
 
 📋 *Cara Penggunaan:*
@@ -1111,17 +1772,34 @@ Kirim pesan ke admin jika ada masalah
         keyboard = [[InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
+        # Check if the original message has text or is a photo
+        try:
+            await query.edit_message_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception as e:
+            if "no text in the message to edit" in str(e).lower():
+                # If original message was a photo, edit the caption instead
+                try:
+                    await query.edit_message_caption(
+                        caption=help_text,
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                except Exception:
+                    # If that fails too, send a new message
+                    await query.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
+            else:
+                # For other errors, try sending a new message
+                await query.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
 
     
 
-    async def back_to_main_callback(self, query):
+    async def back_to_main_callback(self, query: CallbackQuery) -> None:
         """Handle back to main callback"""
         user = query.from_user
-        user_id = user.id
+        user_id: int = user.id
         
         # Get user's watch count
-        watch_info = await self.get_user_watch_count(user_id)
+        watch_info: Dict[str, int] = await self.get_user_watch_count(user_id)
         free_watches_used = watch_info['used']
         free_watches_limit = watch_info['limit']
         remaining_watches = free_watches_limit - free_watches_used
@@ -1179,16 +1857,29 @@ Kirim pesan ke admin jika ada masalah
             
         keyboard.extend([
             [InlineKeyboardButton("📺 Semua Drama", callback_data="show_dramas")],
+            [InlineKeyboardButton("🔍 Cari Drama", callback_data="search_dramas")],
             [InlineKeyboardButton("💰 Paket Premium", callback_data="show_packages")],
             [InlineKeyboardButton("ℹ️ Bantuan", callback_data="help")]
         ])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        
+        # Send with first drama's cover if available
+        if dramas and dramas[0].get('cover'):
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=dramas[0]['cover'],
+                    caption=welcome_text,
+                    parse_mode='Markdown'
+                ),
+                reply_markup=reply_markup
+            )
+        else:
+            await query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
 
-    async def admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin panel for managing payments"""
-        user_id = update.effective_user.id
+        user_id: int = update.effective_user.id
         
         # Simple admin check (you can make this more sophisticated)
         ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
@@ -1226,21 +1917,74 @@ Kirim pesan ke admin jika ada masalah
         except Exception as e:
             await update.message.reply_text(f"❌ Error mengakses data pembayaran: {e}")
 
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle regular text messages"""
-        text = update.message.text
-        user_id = update.effective_user.id
+        text: str = update.message.text
+        user_id: int = update.effective_user.id
         
         # Handle admin commands
         if text.startswith('/activate'):
             await self.handle_manual_activation(update, context)
             return
+        
+        # Check if user is in search mode (after clicking search button)
+        # For now, treat any non-command text as potential search query
+        if not text.startswith('/'):
+            # Treat as search query
+            search_results: List[Dict[str, Any]] = await self.search_dramas_by_name(text)
             
-        await update.message.reply_text("Gunakan /start untuk memulai atau /help untuk bantuan.")
+            if search_results:
+                await self.display_search_results(update, text, search_results, user_id)
+            else:
+                no_result_text: str = f"""
+🔍 *HASIL PENCARIAN*
 
-    async def handle_manual_activation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+Tidak ditemukan drama dengan kata kunci: "{text}"
+
+💡 Tips pencarian:
+• Coba kata kunci yang lebih pendek
+• Periksa ejaan kata kunci  
+• Gunakan kata kunci utama saja
+
+Atau gunakan /cari [nama drama]
+                """
+                
+                keyboard = [
+                    [InlineKeyboardButton("🔍 Coba Lagi", callback_data="search_dramas")],
+                    [InlineKeyboardButton("📺 Lihat Semua", callback_data="show_dramas")],
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(no_result_text, reply_markup=reply_markup, parse_mode='Markdown')
+            return
+        else:
+            # Handle unknown commands
+            unknown_command_text: str = """
+❓ *PERINTAH TIDAK DIKENALI*
+
+📋 Perintah yang tersedia:
+• `/start` - Menu utama
+• `/dramas` - Lihat semua drama
+• `/cari [nama]` - Cari drama
+• `/commands` - Daftar perintah
+• `/help` - Bantuan
+
+💡 Atau ketik nama drama untuk mencari langsung!
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("📋 Lihat Perintah", callback_data="commands")],
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(unknown_command_text, reply_markup=reply_markup, parse_mode='Markdown')
+            return
+
+    async def handle_manual_activation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle manual premium activation by admin"""
-        user_id = update.effective_user.id
+        user_id: int = update.effective_user.id
         ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
         
         if user_id not in ADMIN_IDS:
@@ -1273,14 +2017,42 @@ Kirim pesan ke admin jika ada masalah
         except Exception as e:
             await update.message.reply_text(f"❌ Error: {e}")
 
-    def run(self):
+    async def safe_edit_message(self, query: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = 'Markdown') -> None:
+        """Safely edit message text or caption depending on message type"""
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception as e:
+            if "no text in the message to edit" in str(e).lower():
+                # If original message was a photo, edit the caption instead
+                try:
+                    await query.edit_message_caption(
+                        caption=text,
+                        reply_markup=reply_markup,
+                        parse_mode=parse_mode
+                    )
+                except Exception:
+                    # If that fails too, send a new message
+                    await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            else:
+                # For other errors, try sending a new message
+                await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+    def run(self) -> None:
         """Run the bot"""
         print("🤖 Drama Bot is running...")
         try:
+            # Fix for Python 3.14 event loop issue
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
             self.application.run_polling()
         except RuntimeError as e:
-            if "no current event loop" in str(e):
-                # Fix for Python 3.14 event loop issue
+            if "no current event loop" in str(e) or "There is no current event loop" in str(e):
+                # Alternative fix for Python 3.14 event loop issue
                 import asyncio
                 asyncio.set_event_loop(asyncio.new_event_loop())
                 self.application.run_polling()
