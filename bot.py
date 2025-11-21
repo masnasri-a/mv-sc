@@ -1257,6 +1257,7 @@ Kirim bukti transfer ke @admin
                     'episodes': total_episodes  # Default episodes, can be calculated if needed
                 })
             
+            
             return dramas
         except Exception as e:
             print(f"Error getting featured dramas: {e}")
