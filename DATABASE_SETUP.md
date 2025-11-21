@@ -26,30 +26,39 @@ CREATE TABLE users (
 - `premium_expiry`: Tanggal kadaluarsa premium
 - `total_paid`: Total pembayaran yang sudah dilakukan
 
-### 2. Tabel `payments`
+### 3. Tabel `telegram_cache`
 ```sql
--- Tabel Payments untuk tracking pembayaran via Saweria
-CREATE TABLE payments (
+-- Tabel untuk caching Telegram file_id untuk optimasi video streaming
+CREATE TABLE telegram_cache (
   id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT REFERENCES users(telegram_id) ON DELETE CASCADE,
-  package_type VARCHAR(20) NOT NULL CHECK (package_type IN ('1day', '7day', '30day', '1year')),
-  amount DECIMAL(10,2) NOT NULL,
-  saweria_id VARCHAR(255) UNIQUE,
-  saweria_donation_id VARCHAR(255),
-  status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'failed', 'expired')),
-  webhook_data JSONB,
+  drama_id BIGINT NOT NULL,
+  episode INTEGER NOT NULL,
+  file_id VARCHAR(255) NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  completed_at TIMESTAMP WITH TIME ZONE
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(drama_id, episode)
 );
 ```
 
 **Field Explanation:**
-- `user_id`: Referensi ke telegram_id user
-- `package_type`: Jenis paket (1day, 7day, 30day, 1year)
-- `amount`: Jumlah pembayaran dalam Rupiah
-- `saweria_donation_id`: ID donasi dari Saweria
-- `webhook_data`: Data mentah dari webhook Saweria
-- `status`: Status pembayaran (pending, completed, failed, expired)
+- `drama_id`: ID drama dari tabel Drama
+- `episode`: Nomor episode
+- `file_id`: File ID dari Telegram untuk caching
+- `created_at`: Waktu pertama kali di-cache
+- `updated_at`: Waktu terakhir di-update
+
+### 4. Update Tabel `users` (Tambahan Field)
+```sql
+-- Tambahkan field untuk sistem watch count gratis
+ALTER TABLE users ADD COLUMN IF NOT EXISTS free_watches_used INTEGER DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS free_watches_limit INTEGER DEFAULT 1;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_time TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+```
+
+**Field Explanation:**
+- `free_watches_used`: Jumlah tontonan gratis yang sudah digunakan
+- `free_watches_limit`: Batas maksimal tontonan gratis per minggu
+- `reset_time`: Waktu terakhir reset counter tontonan gratis
 
 ## Cara Setup Saweria Webhook:
 
