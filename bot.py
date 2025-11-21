@@ -1,4 +1,4 @@
-import os, traceback
+import os, traceback, requests
 import json
 import asyncio
 import boto3
@@ -427,7 +427,7 @@ Pilih episode yang ingin ditonton:
             return
         
         # Get episode 1 URL from S3
-        episode_url = await self.get_episode_url(drama_id, 1)
+        episode_url = await self.get_episode_url_with_retry(drama_id, 1)
         if not episode_url:
             await query.edit_message_text("❌ Episode tidak tersedia atau sedang dalam proses upload.")
             return
@@ -557,7 +557,7 @@ Episode 2 dan selanjutnya hanya untuk pengguna premium!
             return
         drama = await self.get_drama_details(drama_id)
         # Get episode URL from S3
-        episode_url = await self.get_episode_url(drama_id, episode_num)
+        episode_url = await self.get_episode_url_with_retry(drama_id, episode_num)
         if not episode_url:
             await query.edit_message_text("❌ Episode tidak tersedia.")
             return
@@ -712,7 +712,7 @@ Pilih paket yang sesuai:
             return
         
         # Get next episode URL from S3
-        episode_url = await self.get_episode_url(drama_id, next_episode)
+        episode_url = await self.get_episode_url_with_retry(drama_id, next_episode)
         if not episode_url:
             await query.edit_message_text(f"❌ Episode {next_episode} tidak tersedia.")
             return
@@ -993,6 +993,28 @@ Kirim bukti transfer ke @admin
         except Exception as e:
             print(f"Error getting episode URL: {e}")
             return None
+
+    async def get_episode_url_with_retry(self, drama_id: str, episode_num: int, drama_title: Optional[str] = None, max_retries: int = 3) -> Optional[str]:
+        """Get episode URL with retry mechanism"""
+        import asyncio
+        
+        for attempt in range(max_retries):
+            try:
+                episode_url = await self.get_episode_url(drama_id, episode_num, drama_title)
+                if episode_url:
+                    return episode_url
+                
+                if attempt < max_retries - 1:  # Don't sleep on last attempt
+                    print(f"Attempt {attempt + 1} failed, retrying in 2 seconds...")
+                    await asyncio.sleep(2)  # Wait 2 seconds before retry
+                    
+            except Exception as e:
+                print(f"Error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+        
+        print(f"Failed to get episode URL after {max_retries} attempts")
+        return None
     # Database operations
     async def generate_presigned_url_from_key(self, s3_key: str) -> Optional[str]:
         """Generate presigned URL from S3 key"""
@@ -1052,21 +1074,21 @@ Kirim bukti transfer ke @admin
             return {'used': 0, 'limit': 1}
         
         try:
-            result = supabase.table('users').select('free_watches_used, free_watches_limit, last_watch_reset').eq('telegram_id', user_id).execute()
+            result = supabase.table('users').select('free_watches_used, free_watches_limit, reset_time').eq('telegram_id', user_id).execute()
             if result.data:
                 user_data = result.data[0]
                 current_time = datetime.now()
                 
                 # Check if we need to reset weekly watch count
-                last_reset = user_data.get('last_watch_reset')
+                last_reset = user_data.get('reset_time')
                 if last_reset:
                     last_reset_time = datetime.fromisoformat(last_reset.replace('Z', '+00:00'))
                     # Reset if more than 7 days have passed
                     if (current_time - last_reset_time).days >= 7:
-                        # Reset watch count and update last reset time
+                        # Reset watch count and update reset time
                         supabase.table('users').update({
                             'free_watches_used': 0,
-                            'last_watch_reset': current_time.isoformat()
+                            'reset_time': current_time.isoformat()
                         }).eq('telegram_id', user_id).execute()
                         return {
                             'used': 0,
@@ -1101,7 +1123,7 @@ Kirim bukti transfer ke @admin
                 # Update with incremented value
                 supabase.table('users').update({
                     'free_watches_used': new_count,
-                    'last_watch_reset': datetime.now().isoformat(),
+                    'reset_time': datetime.now().isoformat(),
                     'last_active': datetime.now().isoformat()
                 }).eq('telegram_id', user_id).execute()
         except Exception as e:
@@ -1197,7 +1219,7 @@ Kirim bukti transfer ke @admin
                     'is_premium': False,
                     'free_watches_used': 0,
                     'free_watches_limit': 1,
-                    'last_watch_reset': datetime.now().isoformat(),
+                    'reset_time': datetime.now().isoformat(),
                     'created_at': datetime.now().isoformat(),
                     'last_active': datetime.now().isoformat()
                 }
@@ -1323,7 +1345,14 @@ Kirim bukti transfer ke @admin
         """Search dramas by book_name with case-insensitive matching"""
         if not supabase:
             return []
-        
+        url_search = 'http://202.155.91.194:8000/search/'
+        try:
+            full_url_search = url_search + search_query.replace(" ", "%20")
+            response = requests.get(full_url_search, timeout=10)
+            # data = response.json()
+            # return data
+        except Exception as e:
+            print(f"Error searching dramas via external API: {e}")
         try:
             # Clean and prepare search query
             clean_query: str = search_query.strip().lower()
