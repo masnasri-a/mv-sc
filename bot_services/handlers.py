@@ -493,86 +493,92 @@ Pilih episode yang ingin ditonton:
 
     async def select_featured_drama_callback(self, query: CallbackQuery, drama_id: str, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle featured drama selection - directly stream episode 1"""
-        # Check watch count first
-        watch_info: Dict[str, int] = await get_user_watch_count(user_id)
-        print("Watch info for featured drama:", watch_info)
-        free_watches_used: int = watch_info['used']
-        free_watches_limit: int = watch_info['limit']
-        remaining_watches: int = free_watches_limit - free_watches_used
-
-        # Check if user has premium
-        is_premium: bool = await check_user_premium_status(user_id)
-
-        if not is_premium and remaining_watches <= 0:
-            # Show premium packages if no free watches left
-            await self.show_packages_callback(query)
-            return
-
-        # Get drama details
-        drama = await get_drama_details(drama_id)
-        if not drama:
-            await query.edit_message_text("❌ Drama tidak ditemukan.")
-            return
-
-        # Get episode 1 URL from S3
-        episode_url = await get_episode_url_with_retry(drama_id, 1)
-        if not episode_url:
-            await query.edit_message_text("❌ Episode tidak tersedia atau sedang dalam proses upload.")
-            return
-
-        # Increment watch count if not premium
-        if not is_premium:
-            await increment_watch_count(user_id)
-            remaining_watches -= 1
-
-        # Send streaming message
-        watch_status = "Premium" if is_premium else f"Gratis ({remaining_watches} tersisa)"
-        text = f"""
-🎬 {drama.get('title', 'Unknown')} - Episode 1
-
-📺 Status: {watch_status}
-📹 Link streaming sedang diproses...
-        """
-
-        # Edit the caption since the original message is a photo
-
-        # Send video file
+        # Answer callback immediately to prevent timeout
+        await query.answer()
+        
+        # Send "please wait" message immediately
+        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode pertama...", parse_mode='Markdown')
+        
         try:
-            if not episode_url:
-                await query.message.reply_text("❌ Video tidak dapat dimuat. Silakan coba lagi nanti.")
+            # Check watch count first
+            watch_info: Dict[str, int] = await get_user_watch_count(user_id)
+            print("Watch info for featured drama:", watch_info)
+            free_watches_used: int = watch_info['used']
+            free_watches_limit: int = watch_info['limit']
+            remaining_watches: int = free_watches_limit - free_watches_used
+
+            # Check if user has premium
+            is_premium: bool = await check_user_premium_status(user_id)
+
+            if not is_premium and remaining_watches <= 0:
+                # Show premium packages if no free watches left
+                await self.show_packages_callback(query)
+                await wait_message.edit_text("❌ Tontonan gratis habis! Silakan upgrade premium.", parse_mode='Markdown')
                 return
 
-            # Use the new caching system to send video
-            await send_video_with_cache(
-                query, context, episode_url, 
-                drama.get('title', 'Unknown'), 1, 
-                query.message.chat_id, query.message.message_id
-            )
+            # Get drama details
+            drama = await get_drama_details(drama_id)
+            if not drama:
+                await wait_message.edit_text("❌ Drama tidak ditemukan.")
+                return
 
-            # Add buttons based on premium status
-            keyboard = []
+            # Update wait message
+            await wait_message.edit_text("⏳ *Sedang memproses...*\n\n📁 Mengambil link video...", parse_mode='Markdown')
 
-            # Only add "Selanjutnya" button for premium users on episode 1
-            if is_premium:
-                keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_1")])
-            else:
-                # Add upgrade button instead of next for non-premium users
-                keyboard.append([InlineKeyboardButton("🔓 Unlock Episode 2+", callback_data="show_packages")])
+            # Get episode 1 URL from S3
+            episode_url = await get_episode_url_with_retry(drama_id, 1)
+            if not episode_url:
+                await wait_message.edit_text("❌ Episode tidak tersedia atau sedang dalam proses upload.")
+                return
 
-            # Add episode selection for premium users
-            if is_premium:
-                actual_episodes = await get_episode_count_from_s3(drama_id)
-                keyboard.append([InlineKeyboardButton("📋 Pilih Episode", callback_data=f"select_episodes_{drama_id}")])
+            # Increment watch count if not premium
+            if not is_premium:
+                await increment_watch_count(user_id)
+                remaining_watches -= 1
 
-            # Always add home button
-            keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
+            # Update wait message
+            await wait_message.edit_text("⏳ *Sedang memproses...*\n\n📹 Mengirim video...", parse_mode='Markdown')
 
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
+            # Send video file
+            try:
+                if not episode_url:
+                    await wait_message.edit_text("❌ Video tidak dapat dimuat. Silakan coba lagi nanti.")
+                    return
 
-            # Show upgrade message if this was last free watch
-            if not is_premium and remaining_watches == 0:
-                upgrade_text = """
+                # Use the new caching system to send video
+                await send_video_with_cache(
+                    query, context, episode_url, 
+                    drama.get('title', 'Unknown'), 1, 
+                    query.message.chat_id, wait_message.message_id
+                )
+
+                # Delete the wait message since video was sent successfully
+                await wait_message.delete()
+
+                # Add buttons based on premium status
+                keyboard = []
+
+                # Only add "Selanjutnya" button for premium users on episode 1
+                if is_premium:
+                    keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_1")])
+                else:
+                    # Add upgrade button instead of next for non-premium users
+                    keyboard.append([InlineKeyboardButton("🔓 Unlock Episode 2+", callback_data="show_packages")])
+
+                # Add episode selection for premium users
+                if is_premium:
+                    actual_episodes = await get_episode_count_from_s3(drama_id)
+                    keyboard.append([InlineKeyboardButton("📋 Pilih Episode", callback_data=f"select_episodes_{drama_id}")])
+
+                # Always add home button
+                keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
+
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
+
+                # Show upgrade message if this was last free watch
+                if not is_premium and remaining_watches == 0:
+                    upgrade_text = """
 ⚠️ *Tontonan gratis Anda telah habis!*
 
 Upgrade ke premium untuk menonton tanpa batas:
@@ -580,128 +586,135 @@ Upgrade ke premium untuk menonton tanpa batas:
 • 📅 7 Hari - Rp 10.000
 • 📆 30 Hari - Rp 25.000
 • 🎉 1 Tahun - Rp 50.000
-                """
+                    """
 
-                keyboard = [
-                    [InlineKeyboardButton("💰 Upgrade Premium", callback_data="show_packages")],
-                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
+                    keyboard = [
+                        [InlineKeyboardButton("💰 Upgrade Premium", callback_data="show_packages")],
+                        [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
 
-                await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+                    await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                await wait_message.edit_text(f"❌ Gagal memuat video: {str(e)}")
+                # Fallback: send text message with video URL if available
+                if 'episode_url' in locals() and episode_url:
+                    fallback_text = f"🎬 {drama['title']} - Episode 1\n📺 Status: {'Premium' if is_premium else f'Gratis ({remaining_watches} tersisa)'}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                    await query.message.reply_text(fallback_text)
+                else:
+                    await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
-            # Fallback: send text message with video URL if available
-            if 'episode_url' in locals() and episode_url:
-                fallback_text = f"🎬 {drama['title']} - Episode 1\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
-                await query.message.reply_text(fallback_text)
-            else:
-                await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+            await wait_message.edit_text(f"❌ Terjadi kesalahan: {str(e)}")
 
     async def stream_episode_callback(self, query: CallbackQuery, drama_id: str, episode_num: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle episode streaming"""
-        # Check watch count first
-        watch_info: Dict[str, int] = await get_user_watch_count(user_id)
-        free_watches_used: int = watch_info['used']
-        free_watches_limit: int = watch_info['limit']
-        remaining_watches: int = free_watches_limit - free_watches_used
+        # Answer callback immediately to prevent timeout
+        await query.answer()
+        
+        # Send "please wait" message immediately
+        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode...", parse_mode='Markdown')
+        
+        try:
+            # Check watch count first
+            watch_info: Dict[str, int] = await get_user_watch_count(user_id)
+            free_watches_used: int = watch_info['used']
+            free_watches_limit: int = watch_info['limit']
+            remaining_watches: int = free_watches_limit - free_watches_used
 
-        # Check if user has premium
-        is_premium: bool = await check_user_premium_status(user_id)
+            # Check if user has premium
+            is_premium: bool = await check_user_premium_status(user_id)
 
-        # Block non-premium users from episode 2 and beyond
-        if not is_premium and episode_num > 1:
-            text = """
+            # Block non-premium users from episode 2 and beyond
+            if not is_premium and episode_num > 1:
+                text = """
 🔒 *EPISODE PREMIUM*
 
 Episode 2 dan selanjutnya hanya untuk pengguna premium!
 
 💰 Upgrade sekarang untuk menonton semua episode:
-            """
+                """
 
-            keyboard = [
-                [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
-                [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
-                [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
-                [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
-                [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+                keyboard = [
+                    [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
+                    [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
+                    [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
+                    [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
+                    [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-            return
+                await wait_message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+                return
 
-        if not is_premium and remaining_watches <= 0:
-            # Show premium packages if no free watches left
-            await self.show_packages_callback(query)
-            return
-        drama = await get_drama_details(drama_id)
-        # Get episode URL from S3
-        episode_url = await get_episode_url_with_retry(drama_id, episode_num)
-        if not episode_url:
-            await query.edit_message_text("❌ Episode tidak tersedia.")
-            return
-
-        # Increment watch count if not premium
-        if not is_premium:
-            await increment_watch_count(user_id)
-            remaining_watches -= 1
-
-        # Send streaming message
-        watch_status = "Premium" if is_premium else f"Gratis ({remaining_watches} tersisa)"
-        text = f"""
-🎬 Episode {episode_num} - Sedang diproses...
-
-📺 Status: {watch_status}
-📹 Link streaming akan segera dikirim!
-        """
-        print("text : "+text)
-
-        # Validate text before editing the message
-        if not text.strip():
-            await query.edit_message_text("❌ Terjadi kesalahan. Pesan tidak dapat dikirim.")
-            return
-
-        await query.edit_message_text(text)
-
-        # Send video file
-        try:
-            caption = f"🎬 Episode {episode_num}\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
+            if not is_premium and remaining_watches <= 0:
+                # Show premium packages if no free watches left
+                await self.show_packages_callback(query)
+                await wait_message.edit_text("❌ Tontonan gratis habis! Silakan upgrade premium.", parse_mode='Markdown')
+                return
             
-            # Use the new caching system to send video
-            await send_video_with_cache(
-                query, context, episode_url, 
-                drama.get('title', 'Unknown'), episode_num, 
-                query.message.chat_id, query.message.message_id
-            )
+            drama = await get_drama_details(drama_id)
+            
+            # Update wait message
+            await wait_message.edit_text("⏳ *Sedang memproses...*\n\n📁 Mengambil link video...", parse_mode='Markdown')
+            
+            # Get episode URL from S3
+            episode_url = await get_episode_url_with_retry(drama_id, episode_num)
+            if not episode_url:
+                await wait_message.edit_text("❌ Episode tidak tersedia.")
+                return
 
-            # Add buttons based on premium status
-            keyboard = []
+            # Increment watch count if not premium
+            if not is_premium:
+                await increment_watch_count(user_id)
+                remaining_watches -= 1
 
-            # Only add "Selanjutnya" button for premium users
-            if is_premium:
-                keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_{episode_num}")])
-            elif episode_num == 1:
-                # For non-premium users on episode 1, show upgrade button instead
-                keyboard.append([InlineKeyboardButton("🔓 Unlock Episode 2+", callback_data="show_packages")])
+            # Update wait message
+            await wait_message.edit_text("⏳ *Sedang memproses...*\n\n Mengirim video...", parse_mode='Markdown')
 
-            # Add episode selection for premium users
-            if is_premium:
-                actual_episodes = await get_episode_count_from_s3(drama_id)
-                keyboard.append([InlineKeyboardButton("📋 Pilih Episode", callback_data=f"select_episodes_{drama_id}")])
+            # Send video file
+            try:
+                caption = f"🎬 Episode {episode_num}\n📺 Status: {'Premium' if is_premium else f'Gratis ({remaining_watches} tersisa)'}\n\nSelamat menonton! 🎭"
+                
+                # Use the new caching system to send video
+                await send_video_with_cache(
+                    query, context, episode_url, 
+                    drama.get('title', 'Unknown'), episode_num, 
+                    query.message.chat_id, wait_message.message_id
+                )
 
-            # Always add home button
-            keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
+                # Delete the wait message since video was sent successfully
+                await wait_message.delete()
 
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
+                # Add buttons based on premium status
+                keyboard = []
 
-            # Show upgrade message if this was last free watch
-            if not is_premium and remaining_watches == 0:
-                upgrade_text = """
+                # Only add "Selanjutnya" button for premium users
+                if is_premium:
+                    keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_{episode_num}")])
+                elif episode_num == 1:
+                    # For non-premium users on episode 1, show upgrade button instead
+                    keyboard.append([InlineKeyboardButton("🔓 Unlock Episode 2+", callback_data="show_packages")])
+
+                # Add episode selection for premium users
+                if is_premium:
+                    actual_episodes = await get_episode_count_from_s3(drama_id)
+                    keyboard.append([InlineKeyboardButton("📋 Pilih Episode", callback_data=f"select_episodes_{drama_id}")])
+
+                # Always add home button
+                keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
+
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
+
+                # Show upgrade message if this was last free watch
+                if not is_premium and remaining_watches == 0:
+                    upgrade_text = """
 ⚠️ *Tontonan gratis Anda telah habis!*
 
 Upgrade ke premium untuk menonton tanpa batas:
@@ -709,149 +722,159 @@ Upgrade ke premium untuk menonton tanpa batas:
 • 📅 7 Hari - Rp 10.000
 • 📆 30 Hari - Rp 25.000
 • 🎉 1 Tahun - Rp 50.000
-                """
+                    """
 
-                keyboard = [
-                    [InlineKeyboardButton("💰 Upgrade Premium", callback_data="show_packages")],
-                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
+                    keyboard = [
+                        [InlineKeyboardButton("💰 Upgrade Premium", callback_data="show_packages")],
+                        [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
 
-                await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+                    await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                await wait_message.edit_text(f"❌ Gagal memuat video: {str(e)}")
+                # Fallback: send text message with video URL if available
+                if 'episode_url' in locals() and episode_url:
+                    drama = await get_drama_details(drama_id)
+                    fallback_text = f"🎬 {drama.get('title', 'Unknown')} - Episode {episode_num}\n📺 Status: {'Premium' if is_premium else f'Gratis ({remaining_watches} tersisa)'}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                    await query.message.reply_text(fallback_text)
+                else:
+                    await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
-            # Fallback: send text message with video URL if available
-            if 'episode_url' in locals() and episode_url:
-                drama = await get_drama_details(drama_id)
-                fallback_text = f"🎬 {drama.get('title', 'Unknown')} - Episode {episode_num}\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
-                await query.message.reply_text(fallback_text)
-            else:
-                await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+            await wait_message.edit_text(f"❌ Terjadi kesalahan: {str(e)}")
 
     async def next_episode_callback(self, query: CallbackQuery, drama_id: str, current_episode: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle next episode streaming"""
-        next_episode: int = current_episode + 1
+        # Answer callback immediately to prevent timeout
+        await query.answer()
+        
+        # Send "please wait" message immediately
+        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode berikutnya...", parse_mode='Markdown')
+        
+        try:
+            next_episode: int = current_episode + 1
 
-        # Get drama details to check if next episode exists
-        drama: Optional[Dict[str, Any]] = await get_drama_details(drama_id)
-        if not drama:
-            await query.edit_message_text("❌ Drama tidak ditemukan.")
-            return
+            # Get drama details to check if next episode exists
+            drama: Optional[Dict[str, Any]] = await get_drama_details(drama_id)
+            if not drama:
+                await wait_message.edit_text("❌ Drama tidak ditemukan.")
+                return
 
-        # Check if next episode exists (assuming max 12 episodes for now)
-        if next_episode > drama.get('episodes', 0):
-            await safe_edit_message(query, "🎬 Sudah mencapai episode terakhir!\n\nGunakan /start untuk kembali ke menu utama.")
-            return
+            # Check if next episode exists (assuming max 12 episodes for now)
+            if next_episode > drama.get('episodes', 0):
+                await wait_message.edit_text("🎬 Sudah mencapai episode terakhir!\n\nGunakan /start untuk kembali ke menu utama.")
+                return
 
-        # Check watch count first
-        watch_info = await get_user_watch_count(user_id)
-        free_watches_used = watch_info['used']
-        free_watches_limit = watch_info['limit']
-        remaining_watches = free_watches_limit - free_watches_used
+            # Check watch count first
+            watch_info = await get_user_watch_count(user_id)
+            free_watches_used = watch_info['used']
+            free_watches_limit = watch_info['limit']
+            remaining_watches = free_watches_limit - free_watches_used
 
-        # Check if user has premium
-        is_premium = await check_user_premium_status(user_id)
+            # Check if user has premium
+            is_premium = await check_user_premium_status(user_id)
 
-        # For non-premium users, block access to episode 2 and beyond
-        if not is_premium and next_episode > 1:
-            text = """
+            # For non-premium users, block access to episode 2 and beyond
+            if not is_premium and next_episode > 1:
+                text = """
 🔒 *EPISODE PREMIUM*
 
 Episode 2 dan selanjutnya hanya untuk pengguna premium!
 
 💰 Upgrade sekarang untuk menonton semua episode:
-            """
+                """
 
-            keyboard = [
-                [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
-                [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
-                [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
-                [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
-                [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+                keyboard = [
+                    [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
+                    [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
+                    [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
+                    [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
+                    [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-            return
+                await wait_message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+                return
 
-        if not is_premium and remaining_watches <= 0:
-            # Force payment - redirect to package selection
-            text = """
+            if not is_premium and remaining_watches <= 0:
+                # Force payment - redirect to package selection
+                text = """
 💰 *TONTONAN GRATIS HABIS!*
 
 Untuk melanjutkan menonton episode berikutnya, Anda perlu upgrade ke premium.
 
 Pilih paket yang sesuai:
-            """
+                """
 
-            keyboard = [
-                [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
-                [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
-                [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
-                [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
-                [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+                keyboard = [
+                    [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
+                    [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
+                    [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
+                    [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
+                    [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-            return
+                await wait_message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+                return
 
-        # Get next episode URL from S3
-        episode_url = await get_episode_url_with_retry(drama_id, next_episode)
-        if not episode_url:
-            await query.edit_message_text(f"❌ Episode {next_episode} tidak tersedia.")
-            return
+            # Update wait message
+            await wait_message.edit_text("⏳ *Sedang memproses...*\n\n📁 Mengambil link video...", parse_mode='Markdown')
 
-        # Increment watch count if not premium
-        if not is_premium:
-            await increment_watch_count(user_id)
-            remaining_watches -= 1
+            # Get next episode URL from S3
+            episode_url = await get_episode_url_with_retry(drama_id, next_episode)
+            if not episode_url:
+                await wait_message.edit_text(f"❌ Episode {next_episode} tidak tersedia.")
+                return
 
-        # Send streaming message
-        watch_status = "Premium" if is_premium else f"Gratis ({remaining_watches} tersisa)"
-        text = f"""
-🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}
+            # Increment watch count if not premium
+            if not is_premium:
+                await increment_watch_count(user_id)
+                remaining_watches -= 1
 
-📺 Status: {watch_status}
-📹 Link streaming sedang diproses...
-        """
+            # Update wait message
+            await wait_message.edit_text("⏳ *Sedang memproses...*\n\n📹 Mengirim video...", parse_mode='Markdown')
 
-        await query.edit_message_text(text)
+            # Send video file
+            try:
+                caption = f"🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}\n📺 Status: {'Premium' if is_premium else f'Gratis ({remaining_watches} tersisa)'}\n\nSelamat menonton! 🎭"
+                
+                # Use the new caching system to send video
+                await send_video_with_cache(
+                    query, context, episode_url, 
+                    drama.get('title', 'Unknown'), next_episode, 
+                    query.message.chat_id, wait_message.message_id
+                )
 
-        # Send video file
-        try:
-            caption = f"🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}\n📺 Status: {watch_status}\n\nSelamat menonton! 🎭"
-            
-            # Use the new caching system to send video
-            await send_video_with_cache(
-                query, context, episode_url, 
-                drama.get('title', 'Unknown'), next_episode, 
-                query.message.chat_id, query.message.message_id
-            )
+                # Delete the wait message since video was sent successfully
+                await wait_message.delete()
 
-            # Add buttons based on premium status
-            keyboard = []
+                # Add buttons based on premium status
+                keyboard = []
 
-            # Always add "Selanjutnya" button
-            keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_{next_episode}")])
+                # Always add "Selanjutnya" button
+                keyboard.append([InlineKeyboardButton("⏭️ Selanjutnya", callback_data=f"next_episode_{drama_id}_{next_episode}")])
 
-            # Add episode selection for premium users
-            if is_premium:
-                actual_episodes = await get_episode_count_from_s3(drama_id)
-                keyboard.append([InlineKeyboardButton("📋 Pilih Episode", callback_data=f"select_episodes_{drama_id}")])
+                # Add episode selection for premium users
+                if is_premium:
+                    actual_episodes = await get_episode_count_from_s3(drama_id)
+                    keyboard.append([InlineKeyboardButton("📋 Pilih Episode", callback_data=f"select_episodes_{drama_id}")])
 
-            # Always add home button
-            keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
+                # Always add home button
+                keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
 
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
 
-            # Show upgrade message if this was last free watch
-            if not is_premium and remaining_watches == 0:
-                upgrade_text = """
+                # Show upgrade message if this was last free watch
+                if not is_premium and remaining_watches == 0:
+                    upgrade_text = """
 ⚠️ *Tontonan gratis Anda telah habis!*
 
 Upgrade ke premium untuk menonton tanpa batas:
@@ -859,26 +882,31 @@ Upgrade ke premium untuk menonton tanpa batas:
 • 📅 7 Hari - Rp 10.000
 • 📆 30 Hari - Rp 25.000
 • 🎉 1 Tahun - Rp 50.000
-                """
+                    """
 
-                keyboard = [
-                    [InlineKeyboardButton("💰 Upgrade Premium", callback_data="show_packages")],
-                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
+                    keyboard = [
+                        [InlineKeyboardButton("💰 Upgrade Premium", callback_data="show_packages")],
+                        [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
 
-                await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+                    await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                await wait_message.edit_text(f"❌ Gagal memuat video: {str(e)}")
+                # Fallback: send text message with video URL if available
+                if 'episode_url' in locals() and episode_url:
+                    fallback_text = f"🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}\n📺 Status: {'Premium' if is_premium else f'Gratis ({remaining_watches} tersisa)'}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
+                    await query.message.reply_text(fallback_text)
+                else:
+                    await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
-            # Fallback: send text message with video URL if available
-            if 'episode_url' in locals() and episode_url:
-                fallback_text = f"🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}\n📺 Status: {watch_status}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
-                await query.message.reply_text(fallback_text)
-            else:
-                await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+            await wait_message.edit_text(f"❌ Terjadi kesalahan: {str(e)}")
 
     async def show_packages_callback(self, query: CallbackQuery) -> None:
         """Show premium packages"""
@@ -980,68 +1008,66 @@ Kirim bukti transfer ke @nanassssa
 
     async def select_episodes_callback(self, query: CallbackQuery, drama_id: str, user_id: int) -> None:
         """Handle episode selection for premium users"""
-        # Check if user is premium
-        is_premium: bool = await check_user_premium_status(user_id)
-        if not is_premium and user_id not in ADMIN_WHITELIST:
-            await query.edit_message_text("❌ Fitur ini hanya untuk pengguna premium.")
-            return
+        # Answer callback immediately to prevent timeout
+        await query.answer()
+        
+        # Send "please wait" message immediately
+        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n📋 Mengambil daftar episode...", parse_mode='Markdown')
+        
+        try:
+            # Check if user is premium
+            is_premium: bool = await check_user_premium_status(user_id)
+            if not is_premium and user_id not in ADMIN_WHITELIST:
+                await wait_message.edit_text("❌ Fitur ini hanya untuk pengguna premium.")
+                return
 
-        # Get drama details
-        drama = await get_drama_details(drama_id)
-        if not drama:
-            await query.edit_message_text("❌ Drama tidak ditemukan.")
-            return
+            # Get drama details
+            drama = await get_drama_details(drama_id)
+            if not drama:
+                await wait_message.edit_text("❌ Drama tidak ditemukan.")
+                return
 
-        # Get actual episode count from S3
-        actual_episodes = await get_episode_count_from_s3(drama_id)
+            # Update wait message
+            await wait_message.edit_text("⏳ *Sedang memproses...*\n\n📋 Membuat daftar episode...", parse_mode='Markdown')
 
-        text = f"""
+            # Get actual episode count from S3
+            actual_episodes = await get_episode_count_from_s3(drama_id)
+
+            text = f"""
 🎬 *{drama.get('title', 'Unknown')}*
 
 📺 Pilih episode yang ingin ditonton:
 📊 Total Episode: {actual_episodes}
-        """
+            """
 
-        keyboard = []
+            keyboard = []
 
-        # Create episode buttons (max 10 per row for better layout)
-        episode_buttons = []
-        for i in range(1, actual_episodes + 1):
-            episode_buttons.append(
-                InlineKeyboardButton(f"{i}", callback_data=f"episode_{drama_id}_{i}")
-            )
-            # Create new row every 5 episodes
-            if len(episode_buttons) == 5:
+            # Create episode buttons (max 10 per row for better layout)
+            episode_buttons = []
+            for i in range(1, actual_episodes + 1):
+                episode_buttons.append(
+                    InlineKeyboardButton(f"{i}", callback_data=f"episode_{drama_id}_{i}")
+                )
+                # Create new row every 5 episodes
+                if len(episode_buttons) == 5:
+                    keyboard.append(episode_buttons)
+                    episode_buttons = []
+
+            # Add remaining buttons
+            if episode_buttons:
                 keyboard.append(episode_buttons)
-                episode_buttons = []
 
-        # Add remaining buttons
-        if episode_buttons:
-            keyboard.append(episode_buttons)
+            # Add back button
+            keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"drama_{drama_id}")])
 
-        # Add back button
-        keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"drama_{drama_id}")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
-        reply_markup = InlineKeyboardMarkup(keyboard)
+            await wait_message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
-        # Check if the original message has text or is a photo
-        try:
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
         except Exception as e:
-            if "no text in the message to edit" in str(e).lower():
-                # If original message was a photo, edit the caption instead
-                try:
-                    await query.edit_message_caption(
-                        caption=text,
-                        reply_markup=reply_markup,
-                        parse_mode='Markdown'
-                    )
-                except Exception:
-                    # If that fails too, send a new message
-                    await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-            else:
-                # For other errors, try sending a new message
-                await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            import traceback
+            traceback.print_exc()
+            await wait_message.edit_text(f"❌ Terjadi kesalahan: {str(e)}")
 
     async def show_dramas_callback(self, query: CallbackQuery) -> None:
         """Handle show dramas callback"""
