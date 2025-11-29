@@ -446,3 +446,101 @@ async def store_telegram_file_id(s3_key: str, file_id: str) -> None:
             supabase.table('telegram_cache').insert(cache_data).execute()
     except Exception as e:
         print(f"Error storing Telegram file_id: {e}")
+
+async def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Get user data by telegram ID"""
+    if not supabase:
+        return None
+
+    try:
+        result = supabase.table('users').select('*').eq('telegram_id', telegram_id).execute()
+        if result.data:
+            return result.data[0]
+        return None
+    except Exception as e:
+        print(f"Error getting user by telegram ID: {e}")
+        return None
+
+async def check_and_expire_premium_users() -> List[Dict[str, Any]]:
+    """Check for expired premium users and update their status"""
+    if not supabase:
+        return []
+
+    try:
+        # Get users whose premium has expired
+        current_time = datetime.now(timezone.utc).isoformat()
+        result = supabase.table('users').select('*').eq('is_premium', True).lt('premium_expiry', current_time).execute()
+
+        expired_users = result.data or []
+
+        # Update expired users
+        for user in expired_users:
+            supabase.table('users').update({
+                'is_premium': False,
+                'premium_expiry': None
+            }).eq('telegram_id', user['telegram_id']).execute()
+
+        return expired_users
+
+    except Exception as e:
+        print(f"Error checking expired premium users: {e}")
+        return []
+
+async def get_expired_premium_users() -> List[Dict[str, Any]]:
+    """Get list of users whose premium has expired"""
+    if not supabase:
+        return []
+
+    try:
+        current_time = datetime.now(timezone.utc).isoformat()
+        result = supabase.table('users').select('*').eq('is_premium', True).lt('premium_expiry', current_time).execute()
+        return result.data or []
+    except Exception as e:
+        print(f"Error getting expired premium users: {e}")
+        return []
+
+async def expire_user_premium(telegram_id: int) -> bool:
+    """Manually expire a user's premium status"""
+    if not supabase:
+        return False
+
+    try:
+        supabase.table('users').update({
+            'is_premium': False,
+            'premium_expiry': None
+        }).eq('telegram_id', telegram_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error expiring user premium: {e}")
+        return False
+
+async def extend_user_premium(telegram_id: int, days: int) -> bool:
+    """Extend user's premium by specified number of days"""
+    if not supabase:
+        return False
+
+    try:
+        # Get current user
+        user_result = supabase.table('users').select('premium_expiry').eq('telegram_id', telegram_id).execute()
+        if not user_result.data:
+            return False
+
+        current_expiry = user_result.data[0].get('premium_expiry')
+
+        if current_expiry:
+            # Parse existing expiry and add days
+            expiry_time = datetime.fromisoformat(current_expiry.replace('Z', '+00:00'))
+            new_expiry = expiry_time + timedelta(days=days)
+        else:
+            # No existing expiry, add from now
+            new_expiry = datetime.now(timezone.utc) + timedelta(days=days)
+
+        supabase.table('users').update({
+            'is_premium': True,
+            'premium_expiry': new_expiry.isoformat()
+        }).eq('telegram_id', telegram_id).execute()
+
+        return True
+    except Exception as e:
+        print(f"Error extending user premium: {e}")
+        return False

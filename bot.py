@@ -32,6 +32,9 @@ class DramaBot:
         self.application.add_handler(CommandHandler("cari", self.handlers.search_dramas))
         self.application.add_handler(CommandHandler("commands", self.handlers.show_commands))
         self.application.add_handler(CommandHandler("admin", self.handlers.admin_panel))
+        self.application.add_handler(CommandHandler("check_expiry", self.handlers.admin_check_expiry))
+        self.application.add_handler(CommandHandler("extend_premium", self.handlers.admin_extend_premium))
+        self.application.add_handler(CommandHandler("expire_premium", self.handlers.admin_expire_premium))
         self.application.add_handler(CallbackQueryHandler(self.handlers.handle_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_message))
 

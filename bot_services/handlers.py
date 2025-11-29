@@ -1,6 +1,8 @@
 from typing import Dict, List, Optional, Any
 import asyncio, os
 import requests
+import aiohttp
+import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, CallbackQuery, BotCommand
 from telegram.ext import ContextTypes
 from bot_services.database import (
@@ -437,6 +439,8 @@ Bantuan lengkap cara menggunakan bot
         elif data.startswith("package_"):
             package_type = data.split("_")[1]
             await self.select_package_callback(query, package_type, user_id)
+        elif data == "check_subscription_status":
+            await self.check_subscription_status_callback(query, user_id)
 
     async def select_drama_callback(self, query: CallbackQuery, drama_id: str, user_id: int) -> None:
         """Handle drama selection"""
@@ -910,6 +914,14 @@ Upgrade ke premium untuk menonton tanpa batas:
 
     async def show_packages_callback(self, query: CallbackQuery) -> None:
         """Show premium packages"""
+        user_id = query.from_user.id
+
+        # Check if user has pending subscription
+        from bot_services.database import get_supabase_client
+        supabase = get_supabase_client()
+        pending_result = supabase.table('subscriptions').select('id').eq('user_id', user_id).eq('status', 'pending').limit(1).execute()
+        has_pending = len(pending_result.data) > 0
+
         text: str = """
 💰 *PAKET PREMIUM DRAMA CINA*
 
@@ -935,18 +947,26 @@ Pilih paket yang sesuai kebutuhan Anda:
    • Drama eksklusif
    • Prioritas support
 
-💳 *Pembayaran:*
-Kirim bukti transfer ke @nanassssa
+💳 *Pembayaran via QRIS*
+Bayar langsung via QR Code
         """
 
         keyboard = [
             [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
             [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
             [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
-            [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
+            [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")]
+        ]
+
+        # Add check status button if user has pending subscription
+        if has_pending:
+            keyboard.append([InlineKeyboardButton("🔍 Cek Status Pembayaran", callback_data="check_subscription_status")])
+
+        keyboard.extend([
             [InlineKeyboardButton("💬 Hubungi Admin", url="https://t.me/admin")],
             [InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")]
-        ]
+        ])
+
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -1528,3 +1548,402 @@ Atau gunakan /cari [nama drama]
 
         except Exception as e:
             await update.message.reply_text(f"❌ Error mengakses data pembayaran: {e}")
+
+    async def create_subscription(self, user_id: int, package_type: str, amount: int) -> Dict[str, Any]:
+        """Create subscription via Saweria API"""
+        saweria_user_id = os.getenv('SAWERIA_USER_ID')
+        if not saweria_user_id:
+            raise ValueError("SAWERIA_USER_ID not configured")
+
+        # Get user info
+        from bot_services.database import get_user_by_telegram_id
+        user = await get_user_by_telegram_id(user_id)
+        if not user:
+            raise ValueError("User not found")
+
+        # Package info
+        package_info = {
+            "1day": {"name": "1 Hari", "price": 3000, "duration": "24 jam"},
+            "7day": {"name": "7 Hari", "price": 10000, "duration": "1 minggu"},
+            "30day": {"name": "30 Hari", "price": 25000, "duration": "1 bulan"},
+            "1year": {"name": "1 Tahun", "price": 50000, "duration": "1 tahun"}
+        }
+
+        if package_type not in package_info:
+            raise ValueError("Invalid package type")
+
+        pkg = package_info[package_type]
+
+        # Prepare API request
+        url = f"https://backend.saweria.co/donations/snap/{saweria_user_id}"
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)'
+        }
+
+        payload = {
+            "agree": True,
+            "notUnderage": True,
+            "message": f"Premium {pkg['name']} - Telegram ID: {user_id}",
+            "amount": pkg['price'],
+            "payment_type": "qris",
+            "vote": "",
+            "currency": "IDR",
+            "customer_info": {
+                "first_name": user.get('first_name', 'User'),
+                "email": f"user{user_id}@telegram.bot",
+                "phone": ""
+            }
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise Exception(f"Saweria API error: {response.status} - {error_text}")
+
+                    result = await response.json()
+
+                    # Save subscription to database
+                    await self.save_subscription_to_db(
+                        user_id=user_id,
+                        saweria_donation_id=result['data']['id'],
+                        amount=pkg['price'],
+                        package_type=package_type,
+                        payment_type="qris",
+                        qr_string=result['data']['qr_string'],
+                        message=payload['message'],
+                        customer_info=payload['customer_info']
+                    )
+
+                    return result['data']
+
+        except Exception as e:
+            print(f"Subscription creation error: {e}")
+            raise
+
+    async def save_subscription_to_db(self, user_id: int, saweria_donation_id: str, amount: int,
+                                    package_type: str, payment_type: str, qr_string: str,
+                                    message: str, customer_info: Dict[str, Any]):
+        """Save subscription data to database"""
+        from bot_services.database import get_supabase_client
+        supabase = get_supabase_client()
+
+        subscription_data = {
+            'user_id': user_id,
+            'saweria_donation_id': saweria_donation_id,
+            'amount': amount,
+            'payment_type': payment_type,
+            'status': 'pending',
+            'qr_string': qr_string,
+            'message': message,
+            'package_type': package_type,
+            'customer_info': customer_info
+        }
+
+        result = supabase.table('subscriptions').insert(subscription_data).execute()
+        return result
+
+    async def select_package_callback(self, query: CallbackQuery, package_type: str, user_id: int) -> None:
+        """Handle package selection with QR code payment"""
+        # Answer callback immediately to prevent timeout
+        await query.answer()
+
+        # Send "please wait" message immediately
+        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n💳 Membuat pembayaran...", parse_mode='Markdown')
+
+        try:
+            package_info = {
+                "1day": {"name": "1 Hari", "price": "Rp 3.000", "duration": "24 jam"},
+                "7day": {"name": "7 Hari", "price": "Rp 10.000", "duration": "1 minggu"},
+                "30day": {"name": "30 Hari", "price": "Rp 25.000", "duration": "1 bulan"},
+                "1year": {"name": "1 Tahun", "price": "Rp 50.000", "duration": "1 tahun"}
+            }
+
+            if package_type not in package_info:
+                await wait_message.edit_text("❌ Paket tidak valid.")
+                return
+
+            pkg = package_info[package_type]
+
+            # Create subscription via Saweria API
+            subscription_data = await self.create_subscription(user_id, package_type, pkg['price'])
+
+            # Generate QR code image from qr_string
+            import qrcode
+            import io
+
+            qr = qrcode.QRCode(version=1, box_size=10, border=5)
+            qr.add_data(subscription_data['qr_string'])
+            qr.make(fit=True)
+
+            img = qr.make_image(fill_color="black", back_color="white")
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            buffer.seek(0)
+
+            # Send QR code with payment instructions
+            text = f"""
+🎟️ *PAKET {pkg['name'].upper()}*
+
+💰 Harga: {pkg['price']}
+⏰ Durasi: {pkg['duration']}
+🆔 ID Pembayaran: `{subscription_data['id'][:8]}...`
+
+📱 *Scan QR Code di bawah untuk bayar:*
+
+✅ *Setelah pembayaran berhasil:*
+• Akses penuh semua drama
+• Streaming tanpa batas
+• Kualitas HD
+• Update terbaru
+
+💡 *Status pembayaran akan otomatis terupdate*
+⏰ *Expired dalam 24 jam*
+            """
+
+            # Send QR code as photo with caption
+            await query.message.reply_photo(
+                photo=buffer,
+                caption=text,
+                parse_mode='Markdown'
+            )
+
+            # Delete the wait message
+            await wait_message.delete()
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            await wait_message.edit_text(f"❌ Gagal membuat pembayaran: {str(e)}")
+
+    async def check_subscription_status_callback(self, query: CallbackQuery, user_id: int) -> None:
+        """Check subscription payment status"""
+        # Answer callback immediately to prevent timeout
+        await query.answer()
+
+        # Send "please wait" message immediately
+        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n🔍 Mengecek status pembayaran...", parse_mode='Markdown')
+
+        try:
+            from bot_services.database import get_supabase_client
+            supabase = get_supabase_client()
+
+            # Get latest pending subscription for user
+            result = supabase.table('subscriptions').select('*').eq('user_id', user_id).eq('status', 'pending').order('created_at', desc=True).limit(1).execute()
+
+            if not result.data:
+                await wait_message.edit_text("❌ Tidak ada pembayaran pending.")
+                return
+
+            subscription = result.data[0]
+
+            # Check status with Saweria API
+            saweria_user_id = os.getenv('SAWERIA_USER_ID')
+            url = f"https://backend.saweria.co/donations/{subscription['saweria_donation_id']}"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        status_data = await response.json()
+
+                        if status_data['data']['status'] == 'COMPLETED':
+                            # Update subscription status
+                            supabase.table('subscriptions').update({
+                                'status': 'completed',
+                                'completed_at': 'now()'
+                            }).eq('id', subscription['id']).execute()
+                            # Activate premium for user
+                            await self.activate_user_premium(user_id, subscription['package_type'])
+                            await wait_message.edit_text("✅ *PEMBAYARAN BERHASIL!*\n\n🌟 Premium Anda telah diaktifkan!\n\nSilakan nikmati semua fitur premium! 🎬", parse_mode='Markdown')
+                            return
+
+            await wait_message.edit_text("⏳ *PEMBAYARAN MASIH PENDING*\n\nBelum ada konfirmasi pembayaran.\n\nCoba lagi dalam beberapa menit atau hubungi admin jika sudah bayar.", parse_mode='Markdown')
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            await wait_message.edit_text(f"❌ Gagal cek status: {str(e)}")
+
+    async def activate_user_premium(self, user_id: int, package_type: str):
+        """Activate premium status for user"""
+        from bot_services.database import get_supabase_client
+        import datetime
+
+        supabase = get_supabase_client()
+
+        # Calculate expiry date based on package
+        now = datetime.datetime.now()
+        if package_type == '1day':
+            expiry = now + datetime.timedelta(days=1)
+        elif package_type == '7day':
+            expiry = now + datetime.timedelta(days=7)
+        elif package_type == '30day':
+            expiry = now + datetime.timedelta(days=30)
+        elif package_type == '1year':
+            expiry = now + datetime.timedelta(days=365)
+        else:
+            expiry = now + datetime.timedelta(days=1)  # Default 1 day
+
+        # Update user premium status
+        supabase.table('users').update({
+            'is_premium': True,
+            'premium_expiry': expiry.isoformat()
+        }).eq('telegram_id', user_id).execute()
+
+    async def check_premium_expiry(self) -> None:
+        """Check and handle expired premium users"""
+        from bot_services.database import check_and_expire_premium_users
+
+        try:
+            expired_users = await check_and_expire_premium_users()
+
+            if expired_users:
+                print(f"Found {len(expired_users)} expired premium users")
+
+                # Send notifications to expired users
+                for user in expired_users:
+                    try:
+                        await self.send_premium_expired_notification(user['telegram_id'], user['first_name'])
+                    except Exception as e:
+                        print(f"Failed to send expiry notification to user {user['telegram_id']}: {e}")
+
+        except Exception as e:
+            print(f"Error checking premium expiry: {e}")
+
+    async def send_premium_expired_notification(self, user_id: int, first_name: str) -> None:
+        """Send notification to user whose premium has expired"""
+        try:
+            text = f"""
+⚠️ *PREMIUM ANDA SUDAH HABIS*
+
+Halo {first_name}! ⏰
+
+Premium Anda sudah expired dan tidak aktif lagi.
+
+📺 *Fitur yang tidak bisa digunakan:*
+• ❌ Akses semua episode drama
+• ❌ Streaming unlimited
+• ❌ Kualitas HD
+• ❌ Download episode
+
+💰 *Upgrade Lagi untuk Melanjutkan:*
+
+Silakan pilih paket premium yang sesuai:
+            """
+
+            keyboard = [
+                [InlineKeyboardButton("🎟️ 1 Hari - Rp 3.000", callback_data="package_1day")],
+                [InlineKeyboardButton("📅 7 Hari - Rp 10.000", callback_data="package_7day")],
+                [InlineKeyboardButton("📆 30 Hari - Rp 25.000", callback_data="package_30day")],
+                [InlineKeyboardButton("🎉 1 Tahun - Rp 50.000", callback_data="package_1year")],
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Try to send message to user
+            await self.application.bot.send_message(
+                chat_id=user_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+
+            print(f"Sent premium expiry notification to user {user_id}")
+
+        except Exception as e:
+            print(f"Failed to send premium expiry notification to user {user_id}: {e}")
+
+    async def admin_check_expiry(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin command to manually check and expire premium users"""
+        user_id = update.effective_user.id
+
+        # Simple admin check
+        ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
+        if user_id not in ADMIN_IDS:
+            await update.message.reply_text("❌ Akses ditolak. Anda bukan admin.")
+            return
+
+        await update.message.reply_text("🔍 Sedang mengecek premium yang expired...")
+
+        try:
+            expired_users = await self.check_premium_expiry()
+
+            if expired_users:
+                text = f"✅ Berhasil mengecek dan expire {len(expired_users)} user premium:\n\n"
+                for user in expired_users:
+                    text += f"• {user['first_name']} (@{user.get('username', 'N/A')}) - ID: {user['telegram_id']}\n"
+                text += "\nNotifikasi sudah dikirim ke user yang bersangkutan."
+            else:
+                text = "✅ Tidak ada user premium yang expired."
+
+            await update.message.reply_text(text)
+
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {e}")
+
+    async def admin_extend_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin command to extend user premium manually"""
+        user_id = update.effective_user.id
+
+        # Simple admin check
+        ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
+        if user_id not in ADMIN_IDS:
+            await update.message.reply_text("❌ Akses ditolak. Anda bukan admin.")
+            return
+
+        try:
+            args = context.args
+            if len(args) != 2:
+                await update.message.reply_text("Format: `/extend_premium <telegram_id> <days>`\nContoh: `/extend_premium 123456789 30`")
+                return
+
+            target_user_id = int(args[0])
+            days = int(args[1])
+
+            from bot_services.database import extend_user_premium
+
+            success = await extend_user_premium(target_user_id, days)
+
+            if success:
+                await update.message.reply_text(f"✅ Berhasil extend premium user {target_user_id} selama {days} hari.")
+            else:
+                await update.message.reply_text(f"❌ Gagal extend premium user {target_user_id}.")
+
+        except ValueError:
+            await update.message.reply_text("❌ Format salah. Gunakan angka untuk telegram_id dan days.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {e}")
+
+    async def admin_expire_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin command to expire user premium manually"""
+        user_id = update.effective_user.id
+
+        # Simple admin check
+        ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
+        if user_id not in ADMIN_IDS:
+            await update.message.reply_text("❌ Akses ditolak. Anda bukan admin.")
+            return
+
+        try:
+            args = context.args
+            if len(args) != 1:
+                await update.message.reply_text("Format: `/expire_premium <telegram_id>`\nContoh: `/expire_premium 123456789`")
+                return
+
+            target_user_id = int(args[0])
+
+            from bot_services.database import expire_user_premium
+
+            success = await expire_user_premium(target_user_id)
+
+            if success:
+                await update.message.reply_text(f"✅ Berhasil expire premium user {target_user_id}.")
+            else:
+                await update.message.reply_text(f"❌ Gagal expire premium user {target_user_id}.")
+
+        except ValueError:
+            await update.message.reply_text("❌ Format salah. Gunakan angka untuk telegram_id.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {e}")
