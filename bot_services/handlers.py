@@ -11,7 +11,7 @@ from bot_services.database import (
     get_drama_details, search_dramas_by_name, generate_payment_code,
     get_episode_count_from_s3, get_telegram_file_id, store_telegram_file_id
 )
-from bot_services.utils import get_episode_url_with_retry, safe_edit_message, generate_presigned_url_from_key
+from bot_services.utils import get_episode_url_with_retry, safe_edit_message, generate_presigned_url_from_key, safe_reply_text
 from bot_services.config import ADMIN_WHITELIST
 from io import BytesIO
 
@@ -224,7 +224,7 @@ class BotHandlers:
                 parse_mode='Markdown'
             )
         else:
-            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await safe_reply_text(update.message, welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command"""
@@ -262,7 +262,7 @@ Untuk akses unlimited, hubungi @nanassssa
 ❓ *Bantuan:*
 Kirim pesan ke admin jika ada masalah
         """
-        await update.message.reply_text(help_text, parse_mode='Markdown')
+        await safe_reply_text(update.message, help_text, parse_mode='Markdown')
 
     async def search_dramas(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /cari command for searching dramas"""
@@ -292,7 +292,7 @@ Atau gunakan tombol di bawah untuk mencari:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await update.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await safe_reply_text(update.message, help_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
 
         # Search for dramas
@@ -316,7 +316,7 @@ Tidak ditemukan drama dengan kata kunci: "{search_query}"
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await update.message.reply_text(no_result_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await safe_reply_text(update.message, no_result_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
 
         # Display search results
@@ -357,7 +357,7 @@ Bantuan lengkap cara menggunakan bot
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.message.reply_text(commands_text, reply_markup=reply_markup, parse_mode='Markdown')
+        await safe_reply_text(update.message, commands_text, reply_markup=reply_markup, parse_mode='Markdown')
 
     async def show_dramas(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show available dramas"""
@@ -376,7 +376,7 @@ Bantuan lengkap cara menggunakan bot
         dramas = await get_available_dramas()
 
         if not dramas:
-            await update.message.reply_text("❌ Maaf, tidak ada drama tersedia saat ini.")
+            await safe_reply_text(update.message, "❌ Maaf, tidak ada drama tersedia saat ini.")
             return
 
         if is_premium:
@@ -396,7 +396,7 @@ Bantuan lengkap cara menggunakan bot
         keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_main")])
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.message.reply_text(text, reply_markup=reply_markup)
+        await safe_reply_text(update.message, text, reply_markup=reply_markup)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle callback queries from inline keyboards"""
@@ -490,10 +490,10 @@ Pilih episode yang ingin ditonton:
                     )
                 except Exception:
                     # If that fails too, send a new message
-                    await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+                    await safe_reply_text(query.message, text, reply_markup=reply_markup, parse_mode='Markdown')
             else:
                 # For other errors, try sending a new message
-                await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+                await safe_reply_text(query.message, text, reply_markup=reply_markup, parse_mode='Markdown')
 
     async def select_featured_drama_callback(self, query: CallbackQuery, drama_id: str, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle featured drama selection - directly stream episode 1"""
@@ -501,7 +501,7 @@ Pilih episode yang ingin ditonton:
         await query.answer()
         
         # Send "please wait" message immediately
-        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode pertama...", parse_mode='Markdown')
+        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode pertama...", parse_mode='Markdown')
         
         try:
             # Check watch count first
@@ -578,7 +578,7 @@ Pilih episode yang ingin ditonton:
                 keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
 
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
+                await safe_reply_text(query.message, "Episode berikutnya:", reply_markup=reply_markup)
 
                 # Show upgrade message if this was last free watch
                 if not is_premium and remaining_watches == 0:
@@ -598,7 +598,7 @@ Upgrade ke premium untuk menonton tanpa batas:
                     ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
 
-                    await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+                    await safe_reply_text(query.message, upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
 
             except Exception as e:
                 import traceback
@@ -607,9 +607,9 @@ Upgrade ke premium untuk menonton tanpa batas:
                 # Fallback: send text message with video URL if available
                 if 'episode_url' in locals() and episode_url:
                     fallback_text = f"🎬 {drama['title']} - Episode 1\n📺 Status: {'Premium' if is_premium else f'Gratis ({remaining_watches} tersisa)'}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
-                    await query.message.reply_text(fallback_text)
+                    await safe_reply_text(query.message, fallback_text)
                 else:
-                    await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+                    await safe_reply_text(query.message, f"❌ Gagal memuat video: {str(e)}")
 
         except Exception as e:
             import traceback
@@ -622,7 +622,7 @@ Upgrade ke premium untuk menonton tanpa batas:
         await query.answer()
         
         # Send "please wait" message immediately
-        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode...", parse_mode='Markdown')
+        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode...", parse_mode='Markdown')
         
         try:
             # Check watch count first
@@ -714,7 +714,7 @@ Episode 2 dan selanjutnya hanya untuk pengguna premium!
                 keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
 
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
+                await safe_reply_text(query.message, "Episode berikutnya:", reply_markup=reply_markup)
 
                 # Show upgrade message if this was last free watch
                 if not is_premium and remaining_watches == 0:
@@ -734,7 +734,7 @@ Upgrade ke premium untuk menonton tanpa batas:
                     ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
 
-                    await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+                    await safe_reply_text(query.message, upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
 
             except Exception as e:
                 import traceback
@@ -744,9 +744,9 @@ Upgrade ke premium untuk menonton tanpa batas:
                 if 'episode_url' in locals() and episode_url:
                     drama = await get_drama_details(drama_id)
                     fallback_text = f"🎬 {drama.get('title', 'Unknown')} - Episode {episode_num}\n📺 Status: {'Premium' if is_premium else f'Gratis ({remaining_watches} tersisa)'}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
-                    await query.message.reply_text(fallback_text)
+                    await safe_reply_text(query.message, fallback_text)
                 else:
-                    await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+                    await safe_reply_text(query.message, f"❌ Gagal memuat video: {str(e)}")
 
         except Exception as e:
             import traceback
@@ -759,7 +759,7 @@ Upgrade ke premium untuk menonton tanpa batas:
         await query.answer()
         
         # Send "please wait" message immediately
-        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode berikutnya...", parse_mode='Markdown')
+        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode berikutnya...", parse_mode='Markdown')
         
         try:
             next_episode: int = current_episode + 1
@@ -874,7 +874,7 @@ Pilih paket yang sesuai:
                 keyboard.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="back_to_main")])
 
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.message.reply_text("Episode berikutnya:", reply_markup=reply_markup)
+                await safe_reply_text(query.message, "Episode berikutnya:", reply_markup=reply_markup)
 
                 # Show upgrade message if this was last free watch
                 if not is_premium and remaining_watches == 0:
@@ -894,7 +894,7 @@ Upgrade ke premium untuk menonton tanpa batas:
                     ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
 
-                    await query.message.reply_text(upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
+                    await safe_reply_text(query.message, upgrade_text, reply_markup=reply_markup, parse_mode='Markdown')
 
             except Exception as e:
                 import traceback
@@ -903,9 +903,9 @@ Upgrade ke premium untuk menonton tanpa batas:
                 # Fallback: send text message with video URL if available
                 if 'episode_url' in locals() and episode_url:
                     fallback_text = f"🎬 {drama.get('title', 'Unknown')} - Episode {next_episode}\n📺 Status: {'Premium' if is_premium else f'Gratis ({remaining_watches} tersisa)'}\n\n📁 Link Video: {episode_url}\n\nKlik link di atas untuk menonton."
-                    await query.message.reply_text(fallback_text)
+                    await safe_reply_text(query.message, fallback_text)
                 else:
-                    await query.message.reply_text(f"❌ Gagal memuat video: {str(e)}")
+                    await safe_reply_text(query.message, f"❌ Gagal memuat video: {str(e)}")
 
         except Exception as e:
             import traceback
@@ -968,9 +968,11 @@ Bayar langsung via QR Code
         ])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception as e:
+            await safe_reply_text(query.message, text, reply_markup=reply_markup, parse_mode='Markdown')
+            
     async def select_package_callback(self, query: CallbackQuery, package_type: str, user_id: int) -> None:
         """Handle package selection"""
         package_info: Dict[str, Dict[str, str]] = {
@@ -1032,7 +1034,7 @@ Bayar langsung via QR Code
         await query.answer()
         
         # Send "please wait" message immediately
-        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n📋 Mengambil daftar episode...", parse_mode='Markdown')
+        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📋 Mengambil daftar episode...", parse_mode='Markdown')
         
         try:
             # Check if user is premium
@@ -1142,10 +1144,10 @@ Bayar langsung via QR Code
                     )
                 except Exception:
                     # If that fails too, send a new message
-                    await query.message.reply_text(text, reply_markup=reply_markup)
+                    await safe_reply_text(query.message, text, reply_markup=reply_markup)
             else:
                 # For other errors, try sending a new message
-                await query.message.reply_text(text, reply_markup=reply_markup)
+                await safe_reply_text(query.message, text, reply_markup=reply_markup)
 
     async def search_dramas_callback(self, query: CallbackQuery) -> None:
         """Handle search dramas callback"""
@@ -1255,10 +1257,10 @@ Kirim pesan ke admin jika ada masalah
                     )
                 except Exception:
                     # If that fails too, send a new message
-                    await query.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
+                    await safe_reply_text(query.message, help_text, reply_markup=reply_markup, parse_mode='Markdown')
             else:
                 # For other errors, try sending a new message
-                await query.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
+                await safe_reply_text(query.message, help_text, reply_markup=reply_markup, parse_mode='Markdown')
 
     async def back_to_main_callback(self, query: CallbackQuery) -> None:
         """Handle back to main callback"""
@@ -1407,7 +1409,7 @@ Pilih drama yang ingin ditonton:
                 parse_mode='Markdown'
             )
         else:
-            await update.message.reply_text(search_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await safe_reply_text(update.message, search_text, reply_markup=reply_markup, parse_mode='Markdown')
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle regular text messages"""
@@ -1448,7 +1450,7 @@ Atau gunakan /cari [nama drama]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
-                await update.message.reply_text(no_result_text, reply_markup=reply_markup, parse_mode='Markdown')
+                await safe_reply_text(update.message, no_result_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
         else:
             # Handle unknown commands
@@ -1471,7 +1473,7 @@ Atau gunakan /cari [nama drama]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await update.message.reply_text(unknown_command_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await safe_reply_text(update.message, unknown_command_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
 
     async def handle_manual_activation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1480,13 +1482,13 @@ Atau gunakan /cari [nama drama]
         ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
 
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Akses ditolak.")
+            await safe_reply_text(update.message, "❌ Akses ditolak.")
             return
 
         try:
             parts = update.message.text.split()
             if len(parts) != 3:
-                await update.message.reply_text("Format: `/activate <payment_id> <telegram_id>`", parse_mode='Markdown')
+                await safe_reply_text(update.message, "Format: `/activate <payment_id> <telegram_id>`", parse_mode='Markdown')
                 return
 
             payment_id = int(parts[1])
@@ -1502,12 +1504,12 @@ Atau gunakan /cari [nama drama]
                     result = await response.json()
 
             if response.status == 200:
-                await update.message.reply_text(f"✅ Premium berhasil diaktivasi untuk user {target_telegram_id}")
+                await safe_reply_text(update.message, f"✅ Premium berhasil diaktivasi untuk user {target_telegram_id}")
             else:
-                await update.message.reply_text(f"❌ Gagal aktivasi: {result.get('error', 'Unknown error')}")
+                await safe_reply_text(update.message, f"❌ Gagal aktivasi: {result.get('error', 'Unknown error')}")
 
         except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}")
+            await safe_reply_text(update.message, f"❌ Error: {e}")
 
     async def admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin panel for managing payments"""
@@ -1517,7 +1519,7 @@ Atau gunakan /cari [nama drama]
         ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
 
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Akses ditolak. Anda bukan admin.")
+            await safe_reply_text(update.message, "❌ Akses ditolak. Anda bukan admin.")
             return
 
         # Get pending payments from webhook server
@@ -1530,7 +1532,7 @@ Atau gunakan /cari [nama drama]
             pending_payments = data.get('pending_payments', [])
 
             if not pending_payments:
-                await update.message.reply_text("✅ Tidak ada pembayaran pending.")
+                await safe_reply_text(update.message, "✅ Tidak ada pembayaran pending.")
                 return
 
             text = "💰 *PEMBAYARAN PENDING*\n\n"
@@ -1544,10 +1546,10 @@ Atau gunakan /cari [nama drama]
             text += "Untuk aktivasi manual:\n"
             text += "`/activate <payment_id> <telegram_id>`"
 
-            await update.message.reply_text(text, parse_mode='Markdown')
+            await safe_reply_text(update.message, text, parse_mode='Markdown')
 
         except Exception as e:
-            await update.message.reply_text(f"❌ Error mengakses data pembayaran: {e}")
+            await safe_reply_text(update.message, f"❌ Error mengakses data pembayaran: {e}")
 
     async def create_subscription(self, user_id: int, package_type: str, amount: int) -> Dict[str, Any]:
         """Create subscription via Saweria API"""
@@ -1599,7 +1601,7 @@ Atau gunakan /cari [nama drama]
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload, headers=headers) as response:
-                    if response.status != 200:
+                    if response.status != 201:
                         error_text = await response.text()
                         raise Exception(f"Saweria API error: {response.status} - {error_text}")
 
@@ -1651,7 +1653,7 @@ Atau gunakan /cari [nama drama]
         await query.answer()
 
         # Send "please wait" message immediately
-        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n💳 Membuat pembayaran...", parse_mode='Markdown')
+        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n💳 Membuat pembayaran...", parse_mode='Markdown')
 
         try:
             package_info = {
@@ -1724,7 +1726,7 @@ Atau gunakan /cari [nama drama]
         await query.answer()
 
         # Send "please wait" message immediately
-        wait_message = await query.message.reply_text("⏳ *Sedang memproses...*\n\n🔍 Mengecek status pembayaran...", parse_mode='Markdown')
+        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n🔍 Mengecek status pembayaran...", parse_mode='Markdown')
 
         try:
             from bot_services.database import get_supabase_client
@@ -1862,10 +1864,10 @@ Silakan pilih paket premium yang sesuai:
         # Simple admin check
         ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Akses ditolak. Anda bukan admin.")
+            await safe_reply_text(update.message, "❌ Akses ditolak. Anda bukan admin.")
             return
 
-        await update.message.reply_text("🔍 Sedang mengecek premium yang expired...")
+        await safe_reply_text(update.message, "🔍 Sedang mengecek premium yang expired...")
 
         try:
             expired_users = await self.check_premium_expiry()
@@ -1878,10 +1880,10 @@ Silakan pilih paket premium yang sesuai:
             else:
                 text = "✅ Tidak ada user premium yang expired."
 
-            await update.message.reply_text(text)
+            await safe_reply_text(update.message, text)
 
         except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}")
+            await safe_reply_text(update.message, f"❌ Error: {e}")
 
     async def admin_extend_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin command to extend user premium manually"""
@@ -1890,13 +1892,13 @@ Silakan pilih paket premium yang sesuai:
         # Simple admin check
         ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Akses ditolak. Anda bukan admin.")
+            await safe_reply_text(update.message, "❌ Akses ditolak. Anda bukan admin.")
             return
 
         try:
             args = context.args
             if len(args) != 2:
-                await update.message.reply_text("Format: `/extend_premium <telegram_id> <days>`\nContoh: `/extend_premium 123456789 30`")
+                await safe_reply_text(update.message, "Format: `/extend_premium <telegram_id> <days>`\nContoh: `/extend_premium 123456789 30`")
                 return
 
             target_user_id = int(args[0])
@@ -1907,14 +1909,14 @@ Silakan pilih paket premium yang sesuai:
             success = await extend_user_premium(target_user_id, days)
 
             if success:
-                await update.message.reply_text(f"✅ Berhasil extend premium user {target_user_id} selama {days} hari.")
+                await safe_reply_text(update.message, f"✅ Berhasil extend premium user {target_user_id} selama {days} hari.")
             else:
-                await update.message.reply_text(f"❌ Gagal extend premium user {target_user_id}.")
+                await safe_reply_text(update.message, f"❌ Gagal extend premium user {target_user_id}.")
 
         except ValueError:
-            await update.message.reply_text("❌ Format salah. Gunakan angka untuk telegram_id dan days.")
+            await safe_reply_text(update.message, "❌ Format salah. Gunakan angka untuk telegram_id dan days.")
         except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}")
+            await safe_reply_text(update.message, f"❌ Error: {e}")
 
     async def admin_expire_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin command to expire user premium manually"""
@@ -1923,13 +1925,13 @@ Silakan pilih paket premium yang sesuai:
         # Simple admin check
         ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Akses ditolak. Anda bukan admin.")
+            await safe_reply_text(update.message, "❌ Akses ditolak. Anda bukan admin.")
             return
 
         try:
             args = context.args
             if len(args) != 1:
-                await update.message.reply_text("Format: `/expire_premium <telegram_id>`\nContoh: `/expire_premium 123456789`")
+                await safe_reply_text(update.message, "Format: `/expire_premium <telegram_id>`\nContoh: `/expire_premium 123456789`")
                 return
 
             target_user_id = int(args[0])
@@ -1939,11 +1941,11 @@ Silakan pilih paket premium yang sesuai:
             success = await expire_user_premium(target_user_id)
 
             if success:
-                await update.message.reply_text(f"✅ Berhasil expire premium user {target_user_id}.")
+                await safe_reply_text(update.message, f"✅ Berhasil expire premium user {target_user_id}.")
             else:
-                await update.message.reply_text(f"❌ Gagal expire premium user {target_user_id}.")
+                await safe_reply_text(update.message, f"❌ Gagal expire premium user {target_user_id}.")
 
         except ValueError:
-            await update.message.reply_text("❌ Format salah. Gunakan angka untuk telegram_id.")
+            await safe_reply_text(update.message, "❌ Format salah. Gunakan angka untuk telegram_id.")
         except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}")
+            await safe_reply_text(update.message, f"❌ Error: {e}")

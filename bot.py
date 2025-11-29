@@ -10,6 +10,8 @@ from supabase import create_client, Client
 from config.db import get_supabase_client
 from dotenv import load_dotenv
 from botocore.client import Config
+from threading import Thread
+import time
 
 # Set event loop policy for Python 3.14 compatibility
 # asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())  # Deprecated in 3.14
@@ -23,6 +25,7 @@ class DramaBot:
         self.application = ApplicationBuilder().token(BOT_TOKEN).build()
         self.handlers = BotHandlers(self.application)
         self.setup_handlers()
+        self.webhook_thread = None
 
     def setup_handlers(self) -> None:
         """Setup all bot handlers"""
@@ -38,13 +41,42 @@ class DramaBot:
         self.application.add_handler(CallbackQueryHandler(self.handlers.handle_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_message))
 
+    def start_webhook_server(self):
+        """Start webhook server in a separate thread"""
+        try:
+            from webhook_handler import app
+            port = int(os.getenv('PORT', 5000))
+            print(f"🚀 Starting Saweria webhook server on port {port}")
+
+            # Use a production WSGI server instead of app.run()
+            from werkzeug.serving import make_server
+            server = make_server('0.0.0.0', port, app, threaded=True)
+            server.serve_forever()
+
+        except Exception as e:
+            print(f"❌ Error starting webhook server: {e}")
+
     async def run_async(self) -> None:
-        """Run the bot asynchronously"""
+        """Run bot and webhook server concurrently"""
+        print("🤖 Starting Drama Bot with Webhook Server...")
+
+        # Start webhook server in background thread
+        self.webhook_thread = Thread(target=self.start_webhook_server, daemon=True)
+        self.webhook_thread.start()
+
+        # Give webhook server time to start
+        time.sleep(2)
+
+        # Start bot polling
+        print("📡 Starting bot polling...")
         await self.application.initialize()
         await self.application.start()
         await self.application.updater.start_polling()
-        
-        # Keep the bot running
+
+        print("✅ Bot and webhook server are running!")
+        print("💡 Press Ctrl+C to stop")
+
+        # Keep running
         try:
             while True:
                 await asyncio.sleep(1)
@@ -54,6 +86,7 @@ class DramaBot:
             await self.application.updater.stop()
             await self.application.stop()
             await self.application.shutdown()
+            print("🛑 Bot and webhook server stopped")
 
     def run(self) -> None:
         """Run the bot"""

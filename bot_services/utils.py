@@ -92,6 +92,22 @@ async def generate_presigned_url(drama_id: str, episode_num: int, drama_title: O
         # Fallback to direct S3 URL
         return f"{s3_client.meta.endpoint_url}/{bucket_name}/{drama_id}/episode_{episode_num}/episode_{episode_num}.mp4"
 
+async def safe_reply_text(message, text: str, reply_markup=None, parse_mode: str = None, **kwargs) -> None:
+    """Safely reply to message, fallback to send_text if reply fails"""
+    try:
+        await message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
+    except Exception as e:
+        print(f"Reply failed, using send_text instead: {e}")
+        try:
+            await message.chat.send_message(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
+        except Exception as e2:
+            print(f"Send message also failed: {e2}")
+            # Last resort - try without parse_mode
+            try:
+                await message.chat.send_message(text, reply_markup=reply_markup, **kwargs)
+            except Exception as e3:
+                print(f"All message sending methods failed: {e3}")
+
 async def safe_edit_message(query, text: str, reply_markup=None, parse_mode: str = None) -> None:
     """Safely edit message text or caption depending on message type"""
     try:
@@ -107,7 +123,7 @@ async def safe_edit_message(query, text: str, reply_markup=None, parse_mode: str
                 )
             except Exception:
                 # If that fails too, send a new message
-                await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+                await safe_reply_text(query.message, text, reply_markup=reply_markup, parse_mode=parse_mode)
         else:
             # For other errors, try sending a new message
-            await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await safe_reply_text(query.message, text, reply_markup=reply_markup, parse_mode=parse_mode)

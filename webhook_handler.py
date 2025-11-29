@@ -87,10 +87,19 @@ def saweria_webhook():
         
         # Extract payment information
         donation_id = data.get('id')  # Saweria donation ID
-        amount = int(data.get('amount', 0))  # Amount in Rupiah
+        amount_raw = int(data.get('amount_raw', 0))  # Raw amount in Rupiah
+        amount_display = data.get('etc', {}).get('amount_to_display', amount_raw)  # Display amount
+        qr_string = data.get('etc', {}).get('qr_string', '')  # QR code string
         message = data.get('message', '')  # Message from donor
         donator_name = data.get('donator_name', 'Anonymous')
         donator_email = data.get('donator_email', '')
+        created_at = data.get('created_at', '')
+        donation_type = data.get('type', 'donation')
+        
+        # Use display amount for package determination, raw amount for actual payment
+        amount = amount_display
+        
+        print(f"💰 Webhook received: {donation_id} | {donator_name} | Raw: {amount_raw} | Display: {amount_display} | Type: {donation_type}")
         
         # Try to extract payment code from message first, then fallback to telegram ID
         telegram_id = None
@@ -129,7 +138,9 @@ def saweria_webhook():
                 if payment_code:
                     supabase.table('payments').update({
                         'saweria_donation_id': donation_id,
-                        'amount': amount,
+                        'amount': amount_raw,  # Store raw amount
+                        'amount_display': amount_display,  # Store display amount
+                        'qr_string': qr_string,  # Store QR code string
                         'status': 'completed',
                         'completed_at': datetime.now().isoformat(),
                         'webhook_data': {**data, 'matched_via': 'payment_code'}
@@ -150,8 +161,10 @@ def saweria_webhook():
                                 'message': 'Payment processed automatically via payment code',
                                 'user_id': telegram_id,
                                 'package_type': package_type,
-                                'amount': amount,
-                                'payment_code': payment_code
+                                'amount_raw': amount_raw,
+                                'amount_display': amount_display,
+                                'payment_code': payment_code,
+                                'donation_id': donation_id
                             }), 200
                 else:
                     # Direct telegram ID match - create new payment record
@@ -160,8 +173,10 @@ def saweria_webhook():
                     payment_data = {
                         'user_id': telegram_id,
                         'package_type': package_type,
-                        'amount': amount,
+                        'amount': amount_raw,  # Store raw amount
+                        'amount_display': amount_display,  # Store display amount
                         'saweria_donation_id': donation_id,
+                        'qr_string': qr_string,  # Store QR code string
                         'status': 'completed',
                         'webhook_data': {**data, 'matched_via': 'telegram_id'},
                         'completed_at': datetime.now().isoformat()
@@ -178,7 +193,9 @@ def saweria_webhook():
                             'message': 'Payment processed automatically via Telegram ID',
                             'user_id': telegram_id,
                             'package_type': package_type,
-                            'amount': amount
+                            'amount_raw': amount_raw,
+                            'amount_display': amount_display,
+                            'donation_id': donation_id
                         }), 200
         
         # Check if payment already exists (prevent duplicate processing)
@@ -195,14 +212,18 @@ def saweria_webhook():
         payment_data = {
             'user_id': None,  # Will be assigned when admin matches with user
             'package_type': package_type,
-            'amount': amount,
+            'amount': amount_raw,  # Store raw amount
+            'amount_display': amount_display,  # Store display amount
             'saweria_donation_id': donation_id,
+            'qr_string': qr_string,  # Store QR code string
             'status': 'pending_assignment',  # New status for unassigned payments
             'webhook_data': {
                 **data,
                 'donator_name': donator_name,
                 'donator_email': donator_email,
-                'message': message
+                'message': message,
+                'created_at': created_at,
+                'donation_type': donation_type
             }
         }
         
@@ -215,7 +236,9 @@ def saweria_webhook():
             'message': 'Payment received and stored',
             'payment_id': payment_id,
             'package_type': package_type,
-            'amount': amount,
+            'amount_raw': amount_raw,
+            'amount_display': amount_display,
+            'donation_id': donation_id,
             'status': 'pending_assignment'
         }), 200
             
@@ -267,7 +290,9 @@ def assign_payment():
                 'message': 'Payment assigned and premium activated',
                 'user_id': telegram_id,
                 'package_type': package_type,
-                'amount': payment['amount']
+                'amount_raw': payment.get('amount', 0),
+                'amount_display': payment.get('amount_display', payment.get('amount', 0)),
+                'donation_id': payment.get('saweria_donation_id')
             }), 200
         else:
             return jsonify({'error': 'Failed to activate premium'}), 500
@@ -287,13 +312,16 @@ def get_pending_payments():
             webhook_data = payment.get('webhook_data', {})
             payments.append({
                 'id': payment['id'],
-                'amount': payment['amount'],
+                'amount_raw': payment.get('amount', 0),
+                'amount_display': payment.get('amount_display', payment.get('amount', 0)),
                 'package_type': payment['package_type'],
                 'donator_name': webhook_data.get('donator_name', 'Anonymous'),
                 'donator_email': webhook_data.get('donator_email', ''),
                 'message': webhook_data.get('message', ''),
                 'created_at': payment['created_at'],
-                'saweria_donation_id': payment['saweria_donation_id']
+                'saweria_donation_id': payment['saweria_donation_id'],
+                'qr_string': payment.get('qr_string', ''),
+                'donation_type': webhook_data.get('donation_type', 'donation')
             })
         
         return jsonify({
