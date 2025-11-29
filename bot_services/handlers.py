@@ -501,7 +501,11 @@ Pilih episode yang ingin ditonton:
         await query.answer()
         
         # Send "please wait" message immediately
-        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode pertama...", parse_mode='Markdown')
+        try:
+            wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode pertama...", parse_mode='Markdown')
+        except Exception as e:
+            print(f"Failed to send wait message: {e}")
+            return
         
         try:
             # Check watch count first
@@ -622,7 +626,11 @@ Upgrade ke premium untuk menonton tanpa batas:
         await query.answer()
         
         # Send "please wait" message immediately
-        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode...", parse_mode='Markdown')
+        try:
+            wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode...", parse_mode='Markdown')
+        except Exception as e:
+            print(f"Failed to send wait message: {e}")
+            return
         
         try:
             # Check watch count first
@@ -759,7 +767,11 @@ Upgrade ke premium untuk menonton tanpa batas:
         await query.answer()
         
         # Send "please wait" message immediately
-        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode berikutnya...", parse_mode='Markdown')
+        try:
+            wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📺 Menyiapkan episode berikutnya...", parse_mode='Markdown')
+        except Exception as e:
+            print(f"Failed to send wait message: {e}")
+            return
         
         try:
             next_episode: int = current_episode + 1
@@ -1034,7 +1046,11 @@ Bayar langsung via QR Code
         await query.answer()
         
         # Send "please wait" message immediately
-        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📋 Mengambil daftar episode...", parse_mode='Markdown')
+        try:
+            wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n📋 Mengambil daftar episode...", parse_mode='Markdown')
+        except Exception as e:
+            print(f"Failed to send wait message: {e}")
+            return
         
         try:
             # Check if user is premium
@@ -1653,7 +1669,11 @@ Atau gunakan /cari [nama drama]
         await query.answer()
 
         # Send "please wait" message immediately
-        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n💳 Membuat pembayaran...", parse_mode='Markdown')
+        try:
+            wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n💳 Membuat pembayaran...", parse_mode='Markdown')
+        except Exception as e:
+            print(f"Failed to send wait message: {e}")
+            return
 
         try:
             package_info = {
@@ -1726,7 +1746,11 @@ Atau gunakan /cari [nama drama]
         await query.answer()
 
         # Send "please wait" message immediately
-        wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n🔍 Mengecek status pembayaran...", parse_mode='Markdown')
+        try:
+            wait_message = await safe_reply_text(query.message, "⏳ *Sedang memproses...*\n\n🔍 Mengecek status pembayaran...", parse_mode='Markdown')
+        except Exception as e:
+            print(f"Failed to send wait message: {e}")
+            return
 
         try:
             from bot_services.database import get_supabase_client
