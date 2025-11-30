@@ -5,6 +5,7 @@ Handles incoming payments from Saweria and activates premium users
 
 import os
 import json
+import re
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from supabase import create_client, Client
@@ -17,7 +18,7 @@ app = Flask(__name__)
 
 # Supabase configuration
 SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+SUPABASE_KEY = os.getenv('ANON_KEY')  # Use ANON_KEY from .env
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 # Saweria configuration
@@ -100,14 +101,17 @@ def saweria_webhook():
         amount = amount_display
         
         print(f"💰 Webhook received: {donation_id} | {donator_name} | Raw: {amount_raw} | Display: {amount_display} | Type: {donation_type}")
+        print(f"📝 Message: '{message}'")
         
         # Try to extract payment code from message first, then fallback to telegram ID
         telegram_id = None
         payment_code = None
         
+        if supabase is None:
+            print("❌ Supabase client not initialized")
+            return jsonify({'error': 'Database connection failed'}), 500
+        
         try:
-            import re
-            
             # Look for payment code pattern (8 character alphanumeric)
             code_match = re.search(r'[A-F0-9]{8}', message.upper())
             if code_match:

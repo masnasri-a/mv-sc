@@ -130,6 +130,8 @@ ngrok http 5000
 
 - **Webhook tidak menerima callback**: Periksa firewall dan pastikan port 5000 terbuka
 - **Payment tidak terdeteksi**: Periksa format message di Saweria (harus ada payment code atau Telegram ID)
+- **Error "NoneType object has no attribute table"**: Pastikan environment variable `ANON_KEY` sudah di-set dengan benar di file `.env`
+- **Supabase connection failed**: Periksa `SUPABASE_URL` dan `ANON_KEY` di file `.env`
 - **Error aktivasi premium**: Periksa koneksi database dan struktur tabel
 
 ## Security
