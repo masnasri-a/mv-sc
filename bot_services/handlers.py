@@ -9,7 +9,8 @@ from bot_services.database import (
     get_user_watch_count, increment_watch_count, check_user_premium_status,
     create_or_update_user, get_featured_dramas, get_available_dramas,
     get_drama_details, search_dramas_by_name, generate_payment_code,
-    get_episode_count_from_s3, get_telegram_file_id, store_telegram_file_id
+    get_episode_count_from_s3, get_telegram_file_id, store_telegram_file_id,
+    get_user_premium_expiry
 )
 from bot_services.utils import get_episode_url_with_retry, safe_edit_message, generate_presigned_url_from_key, safe_reply_text
 from bot_services.config import ADMIN_WHITELIST
@@ -380,7 +381,9 @@ Bantuan lengkap cara menggunakan bot
             return
 
         if is_premium:
-            text = "📺 Drama Tersedia\n🌟 Status: Premium (Unlimited)\n\nPilih drama yang ingin ditonton:"
+            expiry_date = await get_user_premium_expiry(user_id)
+            expiry_text = f" - Expires: {expiry_date}" if expiry_date else ""
+            text = f"📺 Drama Tersedia\n🌟 Status: Premium (Unlimited){expiry_text}\n\nPilih drama yang ingin ditonton:"
         else:
             text = f"📺 Drama Tersedia\n📺 Tontonan gratis: {remaining_watches}/{free_watches_limit}\n\nPilih drama yang ingin ditonton:"
 
@@ -985,7 +988,7 @@ Bayar langsung via QR Code
         except Exception as e:
             await safe_reply_text(query.message, text, reply_markup=reply_markup, parse_mode='Markdown')
             
-    async def select_package_callback(self, query: CallbackQuery, package_type: str, user_id: int) -> None:
+    async def select_package_manual_callback(self, query: CallbackQuery, package_type: str, user_id: int) -> None:
         """Handle package selection"""
         package_info: Dict[str, Dict[str, str]] = {
             "1day": {"name": "1 Hari", "price": "Rp 3.000", "duration": "24 jam"},
@@ -1130,7 +1133,9 @@ Bayar langsung via QR Code
             if user_id in ADMIN_WHITELIST:
                 text = "📺 Drama Tersedia\n👑 Status: Admin (Unlimited)\n\nPilih drama yang ingin ditonton:"
             else:
-                text = "📺 Drama Tersedia\n🌟 Status: Premium (Unlimited)\n\nPilih drama yang ingin ditonton:"
+                expiry_date = await get_user_premium_expiry(user_id)
+                expiry_text = f" - Expires: {expiry_date}" if expiry_date else ""
+                text = f"📺 Drama Tersedia\n🌟 Status: Premium (Unlimited){expiry_text}\n\nPilih drama yang ingin ditonton:"
         else:
             text = f"📺 Drama Tersedia\n📺 Tontonan gratis: {remaining_watches}/{free_watches_limit}\n\nPilih drama yang ingin ditonton:"
 
@@ -1292,6 +1297,12 @@ Kirim pesan ke admin jika ada masalah
         # Check premium status
         is_premium = await check_user_premium_status(user_id)
 
+        # Get premium expiry date if user is premium
+        premium_expiry = None
+        if is_premium and user_id not in ADMIN_WHITELIST:
+            from bot_services.database import get_user_premium_expiry
+            premium_expiry = await get_user_premium_expiry(user_id)
+
         # Get 3 random dramas to display
         dramas = await get_featured_dramas(3)
 
@@ -1299,7 +1310,7 @@ Kirim pesan ke admin jika ada masalah
             if user_id in ADMIN_WHITELIST:
                 status_text = "👑 Admin (Unlimited)"
             else:
-                status_text = "🌟 Premium (Unlimited)"
+                status_text = f"🌟 Premium (Unlimited)\n⏰ Expired: {premium_expiry}" if premium_expiry else "🌟 Premium (Unlimited)"
             welcome_text = f"""
 🎬 Selamat datang kembali!
 
@@ -1371,7 +1382,11 @@ Kirim pesan ke admin jika ada masalah
         results_count: int = len(results)
 
         if is_premium or user_id in ADMIN_WHITELIST:
-            status_text: str = "🌟 Premium (Unlimited)" if is_premium else "👑 Admin (Unlimited)"
+            if user_id in ADMIN_WHITELIST:
+                status_text: str = "👑 Admin (Unlimited)"
+            else:
+                expiry_date = await get_user_premium_expiry(user_id)
+                status_text: str = f"🌟 Premium (Unlimited) - Expires: {expiry_date}" if expiry_date else "🌟 Premium (Unlimited)"
         else:
             remaining_watches: int = watch_info['limit'] - watch_info['used']
             status_text = f"📺 Gratis ({remaining_watches}/{watch_info['limit']})"
