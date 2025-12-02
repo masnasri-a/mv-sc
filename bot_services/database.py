@@ -544,3 +544,52 @@ async def extend_user_premium(telegram_id: int, days: int) -> bool:
     except Exception as e:
         print(f"Error extending user premium: {e}")
         return False
+
+async def check_user_premium_status(user_id: int) -> bool:
+    """Check if user has active premium status"""
+    # Check if user is in admin whitelist - unlimited access
+    if user_id in ADMIN_WHITELIST:
+        return True
+
+    if not supabase:
+        return False
+
+    try:
+        result = supabase.table('users').select('is_premium', 'premium_expiry').eq('telegram_id', user_id).execute()
+        if result.data:
+            user_data = result.data[0]
+            is_premium = user_data.get('is_premium', False)
+            premium_expiry = user_data.get('premium_expiry')
+
+            if is_premium and premium_expiry:
+                # Check if premium hasn't expired
+                expiry_time = datetime.fromisoformat(premium_expiry.replace('Z', '+00:00'))
+                current_time = datetime.now(timezone.utc)
+                return expiry_time > current_time
+            elif is_premium:
+                # Premium without expiry (shouldn't happen, but handle it)
+                return True
+
+        return False
+    except Exception as e:
+        print(f"Error checking premium status: {e}")
+        return False
+
+async def get_user_premium_expiry(user_id: int) -> Optional[str]:
+    """Get user's premium expiry date formatted as YYYY-MM-DD H:i:s"""
+    if not supabase:
+        return None
+
+    try:
+        result = supabase.table('users').select('premium_expiry').eq('telegram_id', user_id).execute()
+        if result.data:
+            premium_expiry = result.data[0].get('premium_expiry')
+            if premium_expiry:
+                # Parse ISO format and convert to readable format
+                expiry_time = datetime.fromisoformat(premium_expiry.replace('Z', '+00:00'))
+                return expiry_time.strftime('%Y-%m-%d %H:%M:%S')
+
+        return None
+    except Exception as e:
+        print(f"Error getting premium expiry: {e}")
+        return None
